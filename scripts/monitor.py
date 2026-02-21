@@ -41,6 +41,7 @@ SENSORS = {
     "sensor-discharge_temp": "discharge_temp",
     "sensor-refrigerant_liquid_temp": "refrigerant_temp",
     "sensor-refrigerant_condensing_temp": "condensing_temp",
+    "sensor-zone_1_setpoint_value": "flow_target_temp",
 }
 
 BINARY_SENSORS = {
@@ -142,6 +143,7 @@ def print_status(sensors):
     """Print a one-line status to console."""
     parts = [
         f"Out:{sensors.get('outside_temp', '?')}C",
+        f"Tgt:{sensors.get('flow_target_temp', '?')}C",
         f"Feed:{sensors.get('feed_temp', '?')}C",
         f"Ret:{sensors.get('return_temp', '?')}C",
         f"dT:{sensors.get('delta_t', '?')}C",
