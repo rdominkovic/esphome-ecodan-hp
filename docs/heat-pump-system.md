@@ -452,9 +452,9 @@ Software-based protection in the ESPHome ecodan-hp integration (package `confs/a
 
 | Parameter | Value | Default | Range | Notes |
 | --------- | ----- | ------- | ----- | ----- |
-| SC: Lockout Duration | **0 min** | 0 | 0, 15, 30, 45, 60 | 0 = disabled |
+| SC: Lockout Duration | **15 min** | 0 | 0, 15, 30, 45, 60 | Enabled Feb 21 08:47 |
 | SC: Minimum On Time | 5 min | 5 | 1-20 | Compressor run shorter than this triggers lockout |
-| SC: Predictive Prevention | **OFF** | OFF | ON/OFF | Enables predictive flow temp boost |
+| SC: Predictive Prevention | **ON** | OFF | ON/OFF | Enabled Feb 21 08:47. Boosts flow temp +0.5 C |
 | SC: High Delta Threshold | 1.0 C | 1.0 | 1.0-3.0 | Overshoot above requested flow temp to trigger timer |
 | SC: High Delta Duration | 4.0 min | 4.0 | 1.0-5.0 | How long overshoot must persist before boost |
 
@@ -605,3 +605,5 @@ Outside temp sensor reads approximately 3-4 C lower than actual. At actual ~0 C,
 | Feb 20 | 19:05 | Pump speed heating 4 → 3 | Flow: 16 → 13 L/min, pump watts: 39 → 25 W, delta T: 2.2 → 3.5-5.5 C |
 | Feb 20 | ~20:18 | Thermo diff. lower limit -5 → -7 | FTC deadband increased to reduce compressor cycling frequency |
 | Feb 21 | 08:32 | Pump speed heating 3 → 5 | Reverted to speed 5 after overnight data showed speed 3 causes compressor cycling (0↔98 Hz sawtooth, 2.14 starts/hr, COP 1.49) |
+| Feb 21 | ~08:47 | SC lockout 0 → 15 min | Enabled short-cycle lockout protection via ESPHome web UI |
+| Feb 21 | ~08:47 | SC predictive prevention OFF → ON | Enabled predictive flow temp boost (+0.5 C) to prevent short cycles |
