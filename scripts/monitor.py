@@ -51,17 +51,24 @@ BINARY_SENSORS = {
     "binary_sensor-water_pump_status": "water_pump",
     "binary_sensor-water_pump_2_status": "water_pump_2",
     "binary_sensor-dhw_eco": "dhw_eco",
-    "binary_sensor-status_short_cycle_lockout": "sc_lockout",
-    "binary_sensor-status_predictive_boost_active": "sc_predictive_boost",
 }
 
-CSV_COLUMNS = ["timestamp"] + list(SENSORS.values()) + list(BINARY_SENSORS.values()) + ["delta_t"]
+# Optional sensors logged if present but not required for completion
+OPTIONAL_BINARY_SENSORS = {
+    "binary_sensor-short-cycle__lockout": "sc_lockout",
+    "binary_sensor-short-cycle__predictive_boost_active": "sc_predictive_boost",
+}
+
+ALL_BINARY = {**BINARY_SENSORS, **OPTIONAL_BINARY_SENSORS}
+
+CSV_COLUMNS = ["timestamp"] + list(SENSORS.values()) + list(BINARY_SENSORS.values()) + list(OPTIONAL_BINARY_SENSORS.values()) + ["delta_t"]
 
 
 def fetch_snapshot():
     """Connect to ESP32 SSE endpoint, collect all initial state, return sensor dict."""
     sensors = {}
-    expected = set(SENSORS.values()) | set(BINARY_SENSORS.values())
+    all_ids = {**SENSORS, **ALL_BINARY}
+    required = set(SENSORS.values()) | set(BINARY_SENSORS.values())
     try:
         req = urllib.request.Request(ESP32_URL)
         with urllib.request.urlopen(req, timeout=10) as response:
@@ -77,11 +84,11 @@ def fetch_snapshot():
                 sensor_id = data.get("id", "")
                 if sensor_id in SENSORS:
                     sensors[SENSORS[sensor_id]] = data.get("value")
-                elif sensor_id in BINARY_SENSORS:
-                    sensors[BINARY_SENSORS[sensor_id]] = 1 if data.get("value") else 0
+                elif sensor_id in ALL_BINARY:
+                    sensors[ALL_BINARY[sensor_id]] = 1 if data.get("value") else 0
 
-                # Stop once we have all expected sensors
-                if expected.issubset(sensors.keys()):
+                # Stop once we have all required sensors (optional may or may not arrive)
+                if required.issubset(sensors.keys()):
                     break
 
     except Exception as e:
@@ -149,7 +156,42 @@ def print_status(sensors):
     print(f"[{datetime.now():%H:%M:%S}] {' | '.join(parts)}")
 
 
+def discover_ids():
+    """Connect to ESP32 SSE, print all entity IDs once, then stop."""
+    print(f"Connecting to {ESP32_URL} to discover entity IDs...\n")
+    known = set(SENSORS.keys()) | set(ALL_BINARY.keys())
+    seen = set()
+    try:
+        req = urllib.request.Request(ESP32_URL)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not (line.startswith("data: ") and "{" in line):
+                    continue
+                try:
+                    data = json.loads(line[6:])
+                except json.JSONDecodeError:
+                    continue
+                sid = data.get("id", "")
+                if not sid:
+                    continue
+                if sid in seen:
+                    break
+                seen.add(sid)
+                val = data.get("value", "")
+                state = data.get("state", "")
+                marker = "  " if sid in known else "? "
+                print(f"  {marker}{sid:55s} value={val}  state={state}")
+    except Exception as e:
+        print(f"Connection ended: {e}")
+    print(f"\nFound {len(seen)} entities ({len(seen) - len(known & seen)} unknown)")
+
+
 def main():
+    if "--discover" in sys.argv:
+        discover_ids()
+        return
+
     print("Ecodan Heat Pump Monitor")
     print(f"Polling {ESP32_URL} every {POLL_INTERVAL}s")
     print(f"Logging to {LOG_FILE}")
