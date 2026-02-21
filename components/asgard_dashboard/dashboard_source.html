@@ -212,6 +212,17 @@ header {
   <div class="header-badges" id="headerBadges">
     <div class="badge">
       <span class="badge-label">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Mode
+      </span>
+      <span class="badge-value" id="b-mode">—</span>
+    </div>
+
+    <div class="badge">
+      <span class="badge-label">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/></svg>
         Feed
       </span>
@@ -909,11 +920,44 @@ function initCharts() {
           enabled: true,
           backgroundColor: '#0f1525', borderColor: '#1e2d4a', borderWidth: 1, titleColor: '#8899bb', bodyColor: '#e2eaff',
           callbacks: {
-            label: (ctx) => {
-               if (ctx.dataset.label === 'Operating Mode') return ` Mode: ${history.mode[ctx.dataIndex] || '—'}`;
-               const keys = ['bin_mode_placeholder', 'bin_comp', 'bin_boost', 'bin_defrost', 'bin_pump', 'bin_in1', 'bin_in6'];
-               const val = history[keys[ctx.datasetIndex]]?.[ctx.dataIndex]; 
-               return ` ${ctx.dataset.label}: ${val ? 'On' : 'Off'}`;
+          label: (ctx) => {
+               const dIdx = ctx.datasetIndex;
+               const idx = ctx.dataIndex;
+               const keys = ['mode', 'bin_comp', 'bin_boost', 'bin_defrost', 'bin_pump', 'bin_in1', 'bin_in6'];
+               const arr = history[keys[dIdx]];
+               const val = arr[idx];
+
+               if (dIdx > 0 && !val) {
+                 return ` ${ctx.dataset.label}: Off`;
+               }
+
+               // Scan backwards and forwards to find the continuous block of THIS specific value
+               let s = idx, e = idx;
+               while (s > 0 && arr[s - 1] === val) s--;
+               while (e < arr.length - 1 && arr[e + 1] === val) e++;
+
+               // Calculate the duration in seconds
+               let durStr = '';
+               if (history.timestamps[e] && history.timestamps[s]) {
+                 let diffMs = history.timestamps[e] - history.timestamps[s];
+                 
+                 // If the block is a single data point, assume it lasted one poll interval (5s)
+                 if (diffMs === 0) diffMs = 5000; 
+
+                 let totalS = Math.round(diffMs / 1000);
+                 let h = Math.floor(totalS / 3600);
+                 let m = Math.floor((totalS % 3600) / 60);
+                 let sec = totalS % 60;
+                 
+                 let pts = [];
+                 if (h > 0) pts.push(h + 'h');
+                 if (m > 0 || h > 0) pts.push(m + 'm');
+                 if (sec > 0 || (h === 0 && m === 0)) pts.push(sec + 's');
+                 
+                 if (pts.length > 0) durStr = ` (${pts.join(' ')})`;
+               }
+               if (dIdx === 0) return ` Mode: ${val || '—'}${durStr}`;
+               return ` ${ctx.dataset.label}: On${durStr}`;
             },
             labelColor: (ctx) => {
                if (ctx.dataset.label === 'Operating Mode') {
@@ -1154,9 +1198,17 @@ function render(d) {
     if(el) { el.min = d.hysteresis_z2_lim.min; el.max = d.hysteresis_z2_lim.max; el.step = d.hysteresis_z2_lim.step; }
   }
 
-  // --- OPERATION MODE MAPPING ---
+  // --- OPERATION MODE MAPPING & COLORING ---
   const modeText = (d.operation_mode !== undefined && d.operation_mode !== null) ? (MODE_MAP[d.operation_mode] || "Unknown") : "—";
-  setText('b-mode', modeText);
+  const modeBadge = document.getElementById('b-mode');
+  if (modeBadge) {
+    modeBadge.textContent = modeText;
+    modeBadge.className = 'badge-value'; // Reset default colors
+    if (d.operation_mode === 2) modeBadge.classList.add('hot'); // Heating -> Orange
+    else if (d.operation_mode === 3) modeBadge.classList.add('cool'); // Cooling -> Blue
+    else if (d.operation_mode === 1 || d.operation_mode === 6) modeBadge.classList.add('warn'); // DHW/Legionella -> Yellow
+    else if (d.operation_mode === 5) modeBadge.classList.add('purple'); // Frost Protect -> Purple
+  }
 
   setText('b-feed',    fmt1(d.hp_feed_temp) + '°');
   setText('b-return',  fmt1(d.hp_return_temp) + '°');
