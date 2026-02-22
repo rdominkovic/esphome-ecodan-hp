@@ -98,7 +98,12 @@ header {
   .legend-item { display: flex; align-items: center; gap: 5px; font-size: 9px; font-family: var(--mono); color: var(--text2); }
   .legend-dot { width: 16px; height: 2px; flex-shrink: 0; }
   .chart-container { position: relative; width: 100%; height: 200px; touch-action: pan-y !important; }
-  canvas { width: 100% !important; touch-action: pan-y !important; }
+  canvas {
+    -webkit-touch-callout: none; 
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: pan-y;
+  }
 
   .ctrl-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
   .ctrl-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); gap: 10px; }
@@ -921,43 +926,47 @@ function initCharts() {
           backgroundColor: '#0f1525', borderColor: '#1e2d4a', borderWidth: 1, titleColor: '#8899bb', bodyColor: '#e2eaff',
           callbacks: {
           label: (ctx) => {
-               const dIdx = ctx.datasetIndex;
-               const idx = ctx.dataIndex;
-               const keys = ['mode', 'bin_comp', 'bin_boost', 'bin_defrost', 'bin_pump', 'bin_in1', 'bin_in6'];
-               const arr = history[keys[dIdx]];
-               const val = arr[idx];
+               try {
+                 const dIdx = ctx.datasetIndex;
+                 const idx = ctx.dataIndex;
+                 const keys = ['mode', 'bin_comp', 'bin_boost', 'bin_defrost', 'bin_pump', 'bin_in1', 'bin_in6'];
+                 const arr = history[keys[dIdx]];
+                 const val = arr ? arr[idx] : null;
 
-               if (dIdx > 0 && !val) {
-                 return ` ${ctx.dataset.label}: Off`;
+                 if (dIdx > 0 && !val) return ` ${ctx.dataset.label}: Off`;
+                 
+                 // Fallback if data is temporarily missing
+                 if (!arr) return ` ${ctx.dataset.label}: ${val}`;
+
+                 // Scan backwards and forwards
+                 let s = idx, e = idx;
+                 while (s > 0 && arr[s - 1] === val) s--;
+                 while (e < arr.length - 1 && arr[e + 1] === val) e++;
+
+                 let durStr = '';
+                 if (history.timestamps && history.timestamps[e] && history.timestamps[s]) {
+                   let diffMs = history.timestamps[e] - history.timestamps[s];
+                   if (diffMs === 0) diffMs = 5000; 
+
+                   let totalS = Math.round(diffMs / 1000);
+                   let h = Math.floor(totalS / 3600);
+                   let m = Math.floor((totalS % 3600) / 60);
+                   let sec = totalS % 60;
+                   
+                   let pts = [];
+                   if (h > 0) pts.push(h + 'h');
+                   if (m > 0 || h > 0) pts.push(m + 'm');
+                   if (sec > 0 || (h === 0 && m === 0)) pts.push(sec + 's');
+                   
+                   if (pts.length > 0) durStr = ` (${pts.join(' ')})`;
+                 }
+
+                 if (dIdx === 0) return ` Mode: ${val || '—'}${durStr}`;
+                 return ` ${ctx.dataset.label}: On${durStr}`;
+                 
+               } catch (err) {
+                 return ` ${ctx.dataset.label}: Error/Unknown`;
                }
-
-               // Scan backwards and forwards to find the continuous block of THIS specific value
-               let s = idx, e = idx;
-               while (s > 0 && arr[s - 1] === val) s--;
-               while (e < arr.length - 1 && arr[e + 1] === val) e++;
-
-               // Calculate the duration in seconds
-               let durStr = '';
-               if (history.timestamps[e] && history.timestamps[s]) {
-                 let diffMs = history.timestamps[e] - history.timestamps[s];
-                 
-                 // If the block is a single data point, assume it lasted one poll interval (5s)
-                 if (diffMs === 0) diffMs = 5000; 
-
-                 let totalS = Math.round(diffMs / 1000);
-                 let h = Math.floor(totalS / 3600);
-                 let m = Math.floor((totalS % 3600) / 60);
-                 let sec = totalS % 60;
-                 
-                 let pts = [];
-                 if (h > 0) pts.push(h + 'h');
-                 if (m > 0 || h > 0) pts.push(m + 'm');
-                 if (sec > 0 || (h === 0 && m === 0)) pts.push(sec + 's');
-                 
-                 if (pts.length > 0) durStr = ` (${pts.join(' ')})`;
-               }
-               if (dIdx === 0) return ` Mode: ${val || '—'}${durStr}`;
-               return ` ${ctx.dataset.label}: On${durStr}`;
             },
             labelColor: (ctx) => {
                if (ctx.dataset.label === 'Operating Mode') {

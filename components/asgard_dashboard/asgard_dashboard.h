@@ -248,7 +248,6 @@ private:
   size_t history_head_{0};
   size_t history_count_{0};
   uint32_t last_history_time_{0};
-  std::mutex history_lock_; 
 
   void record_history_();
   void handle_history_request_(AsyncWebServerRequest *request);

@@ -8,6 +8,9 @@
 #include <cstring>
 #include <cmath>
 
+// #include "esp_system.h"
+// #include "esp_heap_caps.h"
+
 namespace esphome {
 namespace asgard_dashboard {
 
@@ -463,8 +466,6 @@ bool EcodanDashboard::bin_state_(binary_sensor::BinarySensor *b) {
 }
 
 void EcodanDashboard::record_history_() {
-  std::lock_guard<std::mutex> lock(history_lock_);  
-
   HistoryRecord rec;
   rec.timestamp = time(nullptr); 
 
@@ -503,38 +504,54 @@ void EcodanDashboard::record_history_() {
 }
 
 void EcodanDashboard::handle_history_request_(AsyncWebServerRequest *request) {
-AsyncResponseStream *response = request->beginResponseStream("application/json");
+  // uint32_t free_heap = esp_get_free_heap_size();
+  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // ESP_LOGI(TAG, "Memory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+
+  AsyncResponseStream *response = request->beginResponseStream("application/json");
+
+  if (response == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate AsyncResponseStream! Sending 500.");
+    request->send(500, "text/plain", "Out of memory");
+    return;
+  }
+
   response->addHeader("Access-Control-Allow-Origin", "*");
   response->addHeader("Cache-Control", "no-cache");
   
-  std::lock_guard<std::mutex> lock(history_lock_);  
+  size_t current_count = history_count_;
+  size_t current_head = history_head_;
 
-  if (history_count_ == 0) {
+  if (current_count == 0) {
     response->print("[]");
     request->send(response);
     return;
   }
   
   response->print("[");
-  size_t start_idx = (history_count_ == MAX_HISTORY) ? history_head_ : 0;
-  size_t step = (history_count_ > 360) ? (history_count_ / 360) : 1;
+  size_t start_idx = (current_count == MAX_HISTORY) ? current_head : 0;
+  size_t step = (current_count > 360) ? (current_count / 360) : 1;
   if (step < 1) step = 1;
   
   bool first = true;
-  for (size_t i = 0; i < history_count_; i += step) {
+  for (size_t i = 0; i < current_count; i += step) {
     size_t idx = (start_idx + i) % MAX_HISTORY;
-    const HistoryRecord &rec = history_buffer_[idx];
+    HistoryRecord rec = history_buffer_[idx];
+    
     if (!first) response->print(",");
     first = false;
-    response->printf("[%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u]", 
+    
+    char item[128];
+    snprintf(item, sizeof(item), "[%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u]", 
       rec.timestamp, rec.hp_feed, rec.hp_return, 
       rec.z1_sp, rec.z2_sp, rec.z1_curr, rec.z2_curr, 
       rec.z1_flow, rec.z2_flow, rec.freq, rec.flags
     );
+    response->print(item);
   }
+  
   response->print("]");
-  request->send(response);
-}
+  request->send(response);}
 
 }  // namespace asgard_dashboard
 }  // namespace esphome
