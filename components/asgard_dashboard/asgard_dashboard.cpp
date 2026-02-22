@@ -54,134 +54,216 @@ bool EcodanDashboard::canHandle(AsyncWebServerRequest *request) const {
 
 void EcodanDashboard::handleRequest(AsyncWebServerRequest *request) {
   const auto& url = request->url();
+  
   if      (url == "/dashboard" || url == "/dashboard/") handle_root_(request);
   else if (url == "/dashboard/state")                   handle_state_(request);
   else if (url == "/dashboard/set")                     handle_set_(request);
   else if (url == "/dashboard/history")                 handle_history_request_(request);
+  else if (url == "/js/chart.js" || url == "/js/hammer.js" || url == "/js/zoom.js") {
+    handle_js_(request);
+  }
+  else {
+    request->send(404, "text/plain", "Not found");
+  }
+}
+
+void EcodanDashboard::send_chunked_(AsyncWebServerRequest *request, const char *content_type, const uint8_t *data, size_t length, const char *cache_control) {
+  // Extract the native ESP-IDF request pointer
+  httpd_req_t *req = *request;
+  httpd_resp_set_status(req, "200 OK");
+  httpd_resp_set_type(req, content_type);
+  httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
   
-  // JS ROUTES ---
-  else if (url == "/js/chart.js") {
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", CHARTJS_GZ, CHARTJS_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "public, max-age=31536000"); // Let browser cache for 1 year
-    request->send(response);
+  if (cache_control != nullptr) {
+    httpd_resp_set_hdr(req, "Cache-Control", cache_control);
   }
-  else if (url == "/js/hammer.js") {
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", HAMMERJS_GZ, HAMMERJS_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "public, max-age=31536000");
-    request->send(response);
+
+  // Send the compressed array in safe chunks
+  size_t index = 0;
+  size_t remaining = length;
+  const size_t chunk_size = 2048;
+
+  while (remaining > 0) {
+    size_t to_send = (remaining < chunk_size) ? remaining : chunk_size;
+    
+    httpd_resp_send_chunk(req, (const char*)(data + index), to_send);
+    
+    index += to_send;
+    remaining -= to_send;
   }
-  else if (url == "/js/zoom.js") {
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", ZOOMJS_GZ, ZOOMJS_GZ_LEN);
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "public, max-age=31536000");
-    request->send(response);
-  }
-  
-  else request->send(404, "text/plain", "Not found");
+
+  httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 void EcodanDashboard::handle_root_(AsyncWebServerRequest *request) {
-  AsyncWebServerResponse *response = request->beginResponse(
-      200, "text/html", DASHBOARD_HTML_GZ, DASHBOARD_HTML_GZ_LEN);
-  response->addHeader("Content-Encoding", "gzip");
-  response->addHeader("Cache-Control", "no-cache");
-  request->send(response);
+  // uint32_t free_heap = esp_get_free_heap_size();
+  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // ESP_LOGI(TAG, "handle_root_: Memory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+  send_chunked_(request, "text/html", DASHBOARD_HTML_GZ, DASHBOARD_HTML_GZ_LEN, "no-cache");
+}
+
+void EcodanDashboard::handle_js_(AsyncWebServerRequest *request) {
+  // uint32_t free_heap = esp_get_free_heap_size();
+  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // ESP_LOGI(TAG, "handle_js_: Memory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+
+  const auto& url = request->url();
+  const uint8_t *file_data = nullptr;
+  size_t file_len = 0;
+
+  // Determine which file to serve
+  if (url == "/js/chart.js") {
+    file_data = CHARTJS_GZ;
+    file_len = CHARTJS_GZ_LEN;
+  } else if (url == "/js/hammer.js") {
+    file_data = HAMMERJS_GZ;
+    file_len = HAMMERJS_GZ_LEN;
+  } else if (url == "/js/zoom.js") {
+    file_data = ZOOMJS_GZ;
+    file_len = ZOOMJS_GZ_LEN;
+  } else {
+    request->send(404, "text/plain", "File not found");
+    return;
+  }
+
+  send_chunked_(request, "application/javascript", file_data, file_len, "public, max-age=31536000");
 }
 
 void EcodanDashboard::handle_state_(AsyncWebServerRequest *request) {
-  AsyncResponseStream *response = request->beginResponseStream("application/json");
-  response->addHeader("Access-Control-Allow-Origin", "*");
-  response->addHeader("Cache-Control", "no-cache");
-  response->print("{");
+  // uint32_t free_heap = esp_get_free_heap_size();
+  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // ESP_LOGI(TAG, "handle_state_: Memory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
 
-  // --- ZERO-ALLOCATION HELPER FUNCTIES ---
+  httpd_req_t *req = *request;
+  httpd_resp_set_status(req, "200 OK");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+
+  httpd_resp_send_chunk(req, "{", 1);
+
+  char shared_buf[128];
+
+  // --- ZERO-ALLOCATION HELPER LAMBDAS ---
   auto p_sens = [&](const char* k, sensor::Sensor* s) {
-    if (s && s->has_state() && !std::isnan(s->state)) response->printf("\"%s\":%.2f,", k, s->state);
-    else response->printf("\"%s\":null,", k);
+    int len = (s && s->has_state() && !std::isnan(s->state)) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%.2f,", k, s->state)
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
   
   auto p_num = [&](const char* k, number::Number* n) {
-    if (n && n->has_state() && !std::isnan(n->state)) response->printf("\"%s\":%.1f,", k, n->state);
-    else response->printf("\"%s\":null,", k);
+    int len = (n && n->has_state() && !std::isnan(n->state)) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%.1f,", k, n->state)
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_lim = [&](const char* k, number::Number* n) {
-    if (n) response->printf("\"%s\":{\"min\":%.1f,\"max\":%.1f,\"step\":%.1f},", 
-         k, n->traits.get_min_value(), n->traits.get_max_value(), n->traits.get_step());
-    else response->printf("\"%s\":null,", k);
+    int len = (n) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":{\"min\":%.1f,\"max\":%.1f,\"step\":%.1f},", 
+                         k, n->traits.get_min_value(), n->traits.get_max_value(), n->traits.get_step())
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_bin = [&](const char* k, binary_sensor::BinarySensor* b) {
-    if (b && b->has_state()) response->printf("\"%s\":%s,", k, b->state ? "true" : "false");
-    else response->printf("\"%s\":null,", k);
+    int len = (b && b->has_state()) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%s,", k, b->state ? "true" : "false")
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_sw = [&](const char* k, switch_::Switch* sw) {
-    if (sw) response->printf("\"%s\":%s,", k, sw->state ? "true" : "false");
-    else response->printf("\"%s\":null,", k);
+    int len = (sw) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%s,", k, sw->state ? "true" : "false")
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_sel = [&](const char* k, select::Select* sel) {
-    if (sel && sel->active_index().has_value()) 
-        response->printf("\"%s\":\"%zu\",", k, sel->active_index().value());
-    else response->printf("\"%s\":null,", k);
+    int len = 0;
+    if (sel) {
+      auto opt_index = sel->active_index(); 
+      if (opt_index.has_value()) {
+        len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"%zu\",", k, opt_index.value());
+        httpd_resp_send_chunk(req, shared_buf, len);
+        return;
+      }
+    }
+    len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_txt = [&](const char* k, text_sensor::TextSensor* t) {
-    response->printf("\"%s\":\"", k);
+    int len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
+    
     if (t && t->has_state()) {
-      char stack_buf[128];
+      // Safe string escaping directly from the state
+      strncpy(shared_buf, t->state.c_str(), sizeof(shared_buf) - 1);
+      shared_buf[sizeof(shared_buf) - 1] = '\0'; 
       
-      strncpy(stack_buf, t->state.c_str(), sizeof(stack_buf) - 1);
-      stack_buf[sizeof(stack_buf) - 1] = '\0'; 
-      
-      for (char *c = stack_buf; *c != '\0'; ++c) {
-        if (*c == '"') response->print("\\\"");
-        else if (*c == '\\') response->print("\\\\");
-        else response->printf("%c", *c);
+      for (char *c = shared_buf; *c != '\0'; ++c) {
+        if (*c == '"') httpd_resp_send_chunk(req, "\\\"", 2);
+        else if (*c == '\\') httpd_resp_send_chunk(req, "\\\\", 2);
+        else httpd_resp_send_chunk(req, c, 1);
       }
     }
-    response->print("\",");
+    httpd_resp_send_chunk(req, "\",", 2);
   };
 
   auto p_clim_cur = [&](const char* k, climate::Climate* c) {
-    if (c && !std::isnan(c->current_temperature)) response->printf("\"%s\":%.1f,", k, c->current_temperature);
-    else response->printf("\"%s\":null,", k);
+    int len = (c && !std::isnan(c->current_temperature)) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%.1f,", k, c->current_temperature)
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_clim_tar = [&](const char* k, climate::Climate* c) {
-    if (c && !std::isnan(c->target_temperature)) response->printf("\"%s\":%.1f,", k, c->target_temperature);
-    else response->printf("\"%s\":null,", k);
+    int len = (c && !std::isnan(c->target_temperature)) 
+              ? snprintf(shared_buf, sizeof(shared_buf), "\"%s\":%.1f,", k, c->target_temperature)
+              : snprintf(shared_buf, sizeof(shared_buf), "\"%s\":null,", k);
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_clim_act = [&](const char* k, climate::Climate* c) {
-    if (!c) { response->printf("\"%s\":\"off\",", k); return; }
-    switch (c->action) {
-      case climate::CLIMATE_ACTION_OFF: response->printf("\"%s\":\"off\",", k); break;
-      case climate::CLIMATE_ACTION_COOLING: response->printf("\"%s\":\"cooling\",", k); break;
-      case climate::CLIMATE_ACTION_HEATING: response->printf("\"%s\":\"heating\",", k); break;
-      case climate::CLIMATE_ACTION_DRYING: response->printf("\"%s\":\"drying\",", k); break;
-      case climate::CLIMATE_ACTION_IDLE: 
-      default: response->printf("\"%s\":\"idle\",", k); break;
+    int len;
+    if (!c) { len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"off\",", k); }
+    else {
+      switch (c->action) {
+        case climate::CLIMATE_ACTION_OFF:     len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"off\",", k); break;
+        case climate::CLIMATE_ACTION_COOLING: len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"cooling\",", k); break;
+        case climate::CLIMATE_ACTION_HEATING: len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"heating\",", k); break;
+        case climate::CLIMATE_ACTION_DRYING:  len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"drying\",", k); break;
+        case climate::CLIMATE_ACTION_IDLE: 
+        default:                              len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"idle\",", k); break;
+      }
     }
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
   auto p_clim_mode = [&](const char* k, climate::Climate* c) {
-    if (!c) { response->printf("\"%s\":\"off\",", k); return; }
-    switch (c->mode) {
-      case climate::CLIMATE_MODE_HEAT: response->printf("\"%s\":\"heat\",", k); break;
-      case climate::CLIMATE_MODE_COOL: response->printf("\"%s\":\"cool\",", k); break;
-      case climate::CLIMATE_MODE_AUTO: response->printf("\"%s\":\"auto\",", k); break;
-      case climate::CLIMATE_MODE_OFF:
-      default: response->printf("\"%s\":\"off\",", k); break;
+    int len;
+    if (!c) { len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"off\",", k); }
+    else {
+      switch (c->mode) {
+        case climate::CLIMATE_MODE_HEAT: len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"heat\",", k); break;
+        case climate::CLIMATE_MODE_COOL: len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"cool\",", k); break;
+        case climate::CLIMATE_MODE_AUTO: len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"auto\",", k); break;
+        case climate::CLIMATE_MODE_OFF:
+        default:                         len = snprintf(shared_buf, sizeof(shared_buf), "\"%s\":\"off\",", k); break;
+      }
     }
+    httpd_resp_send_chunk(req, shared_buf, len);
   };
 
-  // --- DIRECT DATA STREAMING ---
-  response->printf("\"ui_use_room_z1\":%s,", (ui_use_room_z1_ != nullptr) && ui_use_room_z1_->value() ? "true" : "false");
-  response->printf("\"ui_use_room_z2\":%s,", (ui_use_room_z2_ != nullptr) && ui_use_room_z2_->value() ? "true" : "false");
+  // stream data
+  int t_len = snprintf(shared_buf, sizeof(shared_buf), "\"ui_use_room_z1\":%s,", (ui_use_room_z1_ != nullptr) && ui_use_room_z1_->value() ? "true" : "false");
+  httpd_resp_send_chunk(req, shared_buf, t_len);
+  
+  t_len = snprintf(shared_buf, sizeof(shared_buf), "\"ui_use_room_z2\":%s,", (ui_use_room_z2_ != nullptr) && ui_use_room_z2_->value() ? "true" : "false");
+  httpd_resp_send_chunk(req, shared_buf, t_len);
   
   p_sens("hp_feed_temp", hp_feed_temp_);
   p_sens("hp_return_temp", hp_return_temp_);
@@ -266,7 +348,8 @@ void EcodanDashboard::handle_state_(AsyncWebServerRequest *request) {
   p_bin("status_in1_request", status_in1_request_);
   p_bin("status_in6_request", status_in6_request_);
   
-  response->printf("\"zone2_enabled\":%s,", bin_state_(status_zone2_enabled_) ? "true" : "false");
+  t_len = snprintf(shared_buf, sizeof(shared_buf), "\"zone2_enabled\":%s,", bin_state_(status_zone2_enabled_) ? "true" : "false");
+  httpd_resp_send_chunk(req, shared_buf, t_len);
 
   p_sw("pred_sc_en", pred_sc_switch_);
   p_sw("auto_adaptive_control_enabled", sw_auto_adaptive_);
@@ -277,10 +360,11 @@ void EcodanDashboard::handle_state_(AsyncWebServerRequest *request) {
   p_txt("latest_version", version_);
 
   if (operation_mode_ && operation_mode_->has_state() && !std::isnan(operation_mode_->state)) {
-    response->printf("\"operation_mode\":%d,", (int)operation_mode_->state);
+    t_len = snprintf(shared_buf, sizeof(shared_buf), "\"operation_mode\":%d,", (int)operation_mode_->state);
   } else {
-    response->print("\"operation_mode\":null,");
+    t_len = snprintf(shared_buf, sizeof(shared_buf), "\"operation_mode\":null,");
   }
+  httpd_resp_send_chunk(req, shared_buf, t_len);
   
   p_sel("heating_system_type", sel_heating_system_type_);
   p_sel("room_temp_source_z1", sel_room_temp_source_z1_);
@@ -290,9 +374,11 @@ void EcodanDashboard::handle_state_(AsyncWebServerRequest *request) {
   p_sel("temp_sensor_source_z1", sel_temp_source_z1_);
   p_sel("temp_sensor_source_z2", sel_temp_source_z2_);
 
-  response->printf("\"_uptime_ms\":%u}", millis());
+  t_len = snprintf(shared_buf, sizeof(shared_buf), "\"_uptime_ms\":%u}", millis());
+  httpd_resp_send_chunk(req, shared_buf, t_len);
   
-  request->send(response);
+  // Send 0-length chunk to complete the transfer
+  httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 void EcodanDashboard::handle_set_(AsyncWebServerRequest *request) {
@@ -504,54 +590,50 @@ void EcodanDashboard::record_history_() {
 }
 
 void EcodanDashboard::handle_history_request_(AsyncWebServerRequest *request) {
-  // uint32_t free_heap = esp_get_free_heap_size();
-  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  // ESP_LOGI(TAG, "Memory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+  httpd_req_t *req = *request;
+  httpd_resp_set_status(req, "200 OK");
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
-  AsyncResponseStream *response = request->beginResponseStream("application/json");
-
-  if (response == nullptr) {
-    ESP_LOGE(TAG, "Failed to allocate AsyncResponseStream! Sending 500.");
-    request->send(500, "text/plain", "Out of memory");
-    return;
-  }
-
-  response->addHeader("Access-Control-Allow-Origin", "*");
-  response->addHeader("Cache-Control", "no-cache");
-  
   size_t current_count = history_count_;
   size_t current_head = history_head_;
 
   if (current_count == 0) {
-    response->print("[]");
-    request->send(response);
+    httpd_resp_send_chunk(req, "[]", 2);
+    httpd_resp_send_chunk(req, nullptr, 0); 
     return;
   }
   
-  response->print("[");
   size_t start_idx = (current_count == MAX_HISTORY) ? current_head : 0;
   size_t step = (current_count > 360) ? (current_count / 360) : 1;
   if (step < 1) step = 1;
+  
+  // Start the JSON array
+  httpd_resp_send_chunk(req, "[", 1);
   
   bool first = true;
   for (size_t i = 0; i < current_count; i += step) {
     size_t idx = (start_idx + i) % MAX_HISTORY;
     HistoryRecord rec = history_buffer_[idx];
     
-    if (!first) response->print(",");
+    if (!first) {
+      httpd_resp_send_chunk(req, ",", 1);
+    }
     first = false;
     
     char item[128];
-    snprintf(item, sizeof(item), "[%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u]", 
+    int len = snprintf(item, sizeof(item), "[%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u]", 
       rec.timestamp, rec.hp_feed, rec.hp_return, 
       rec.z1_sp, rec.z2_sp, rec.z1_curr, rec.z2_curr, 
       rec.z1_flow, rec.z2_flow, rec.freq, rec.flags
     );
-    response->print(item);
+    httpd_resp_send_chunk(req, item, len);
   }
-  
-  response->print("]");
-  request->send(response);}
+  httpd_resp_send_chunk(req, "]", 1);
+  // Send 0-length chunk to signal the end of the transmission
+  httpd_resp_send_chunk(req, nullptr, 0);
+}
 
 }  // namespace asgard_dashboard
 }  // namespace esphome

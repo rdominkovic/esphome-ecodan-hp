@@ -251,6 +251,8 @@ private:
 
   void record_history_();
   void handle_history_request_(AsyncWebServerRequest *request);
+  void handle_js_(AsyncWebServerRequest *request);
+  void send_chunked_(AsyncWebServerRequest *request, const char *content_type, const uint8_t *data, size_t length, const char *cache_control);
   static int16_t pack_temp_(float val);
   static bool bin_state_(binary_sensor::BinarySensor *b);
 };
