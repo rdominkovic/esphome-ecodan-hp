@@ -97,12 +97,12 @@ header {
   .chart-legend { display: flex; gap: 10px; flex-wrap: wrap; }
   .legend-item { display: flex; align-items: center; gap: 5px; font-size: 9px; font-family: var(--mono); color: var(--text2); }
   .legend-dot { width: 16px; height: 2px; flex-shrink: 0; }
-  .chart-container { position: relative; width: 100%; height: 200px; touch-action: pan-y !important; }
+  .chart-container { position: relative; width: 100%; height: 200px; }
   canvas {
     -webkit-touch-callout: none; 
     -webkit-user-select: none;
     user-select: none;
-    touch-action: pan-y;
+    touch-action: pan-y !important;
   }
 
   .ctrl-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
@@ -767,7 +767,11 @@ function initCharts() {
           enabled: true,
           mode: 'x',
           modifierKey: 'alt', 
-          onPanStart({chart}) {
+          threshold: 10, 
+          onPanStart({chart, event}) {
+            if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+              return false; 
+            }
             chart.options.plugins.tooltip.enabled = false;
             chart.tooltip.setActiveElements([], {x: 0, y: 0});
             chart.update('none');
