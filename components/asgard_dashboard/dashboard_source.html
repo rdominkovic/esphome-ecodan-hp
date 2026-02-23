@@ -370,7 +370,7 @@ header {
         <div class="legend-item"><div class="legend-dot" style="background:#ff6b35"></div>Heating</div>
         <div class="legend-item"><div class="legend-dot" style="background:#00c8ff"></div>Cooling</div>
         <div class="legend-item"><div class="legend-dot" style="background:#ffb020"></div>DHW</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#00ff7f"></div>Legionella</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#7fff7f"></div>Legionella</div>
         <div class="legend-item"><div class="legend-dot" style="background:#c084fc"></div>Defrost</div>
         <div class="legend-item"><div class="legend-dot" style="background:#ff0000"></div>Booster</div>
       </div>
@@ -726,22 +726,22 @@ function switchTab(viewId, btn) {
 function getActivityColor(mode, alpha) {
   if (!mode) return `rgba(74, 90, 122, ${alpha})`;
   const m = mode.toLowerCase();
-  if (m.includes('legionella')) return `rgba(0, 255, 127, ${alpha})`;
-  if (m.includes('hot water') || m.includes('dhw') || m.includes('heating water')) return `rgba(255, 176, 32, ${alpha})`;
-  if (m.includes('cooling'))   return `rgba(0, 200, 255, ${alpha})`;
-  if (m.includes('heating'))   return `rgba(255, 107, 53, ${alpha})`;
-  if (m.includes('defrost'))   return `rgba(192, 132, 252, ${alpha})`;
-  return `rgba(74, 90, 122, ${alpha})`;
+  if (m.includes('legionella')) return `rgba(127, 255, 127, ${alpha})`; // #7fff7f (Green)
+  if (m.includes('hot water') || m.includes('dhw') || m.includes('heating water')) return `rgba(255, 176, 32, ${alpha})`; // #ffb020 (Yellow)
+  if (m.includes('cooling'))   return `rgba(0, 200, 255, ${alpha})`; // #00c8ff (Blue)
+  if (m.includes('heating'))   return `rgba(255, 107, 53, ${alpha})`; // #ff6b35 (Orange)
+  if (m.includes('frost') || m.includes('defrost')) return `rgba(192, 132, 252, ${alpha})`; // #c084fc (Purple)
+  return `rgba(74, 90, 122, ${alpha})`; // Gray for Off/Standby
 }
 
 function getModeColor(mode) {
   if (!mode) return 'transparent';
   const m = mode.toLowerCase();
-  if (m.includes('legionella')) return '#00ff7f'; 
+  if (m.includes('legionella')) return '#7fff7f'; 
   if (m.includes('hot water') || m.includes('dhw') || m.includes('heating water')) return '#ffb020';
   if (m.includes('cooling'))   return '#00c8ff';
   if (m.includes('heating'))   return '#ff6b35';
-  if (m.includes('defrost'))   return '#c084fc';
+  if (m.includes('frost') || m.includes('defrost')) return '#c084fc';
   if (m.includes('standby') || m.includes('off')) return '#4a5a7a';
   return '#4a5a7a';
 }
@@ -1207,16 +1207,16 @@ function render(d) {
     if(el) { el.min = d.hysteresis_z2_lim.min; el.max = d.hysteresis_z2_lim.max; el.step = d.hysteresis_z2_lim.step; }
   }
 
-  // --- OPERATION MODE MAPPING & COLORING ---
   const modeText = (d.operation_mode !== undefined && d.operation_mode !== null) ? (MODE_MAP[d.operation_mode] || "Unknown") : "—";
   const modeBadge = document.getElementById('b-mode');
   if (modeBadge) {
     modeBadge.textContent = modeText;
     modeBadge.className = 'badge-value'; // Reset default colors
-    if (d.operation_mode === 2) modeBadge.classList.add('hot'); // Heating -> Orange
-    else if (d.operation_mode === 3) modeBadge.classList.add('cool'); // Cooling -> Blue
-    else if (d.operation_mode === 1 || d.operation_mode === 6) modeBadge.classList.add('warn'); // DHW/Legionella -> Yellow
-    else if (d.operation_mode === 5) modeBadge.classList.add('purple'); // Frost Protect -> Purple
+    if (d.operation_mode === 2) modeBadge.classList.add('hot'); // Heating -> Oranje
+    else if (d.operation_mode === 3) modeBadge.classList.add('cool'); // Cooling -> Blauw
+    else if (d.operation_mode === 1) modeBadge.classList.add('warn'); // DHW -> Geel
+    else if (d.operation_mode === 6) modeBadge.classList.add('green'); // Legionella -> Groen
+    else if (d.operation_mode === 5) modeBadge.classList.add('purple'); // Frost Protect -> Paars
   }
 
   setText('b-feed',    fmt1(d.hp_feed_temp) + '°');
