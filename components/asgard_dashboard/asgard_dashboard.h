@@ -39,6 +39,88 @@ struct HistoryRecord {
   uint16_t flags; // Bit 0-5 = booleans, Bit 6-9 = mode
 };
 
+struct DashboardSnapshot {
+  // Boolean sensors
+  bool ui_use_room_z1{false};
+  bool ui_use_room_z2{false};
+  bool status_compressor{false};
+  bool status_booster{false};
+  bool status_defrost{false};
+  bool status_water_pump{false};
+  bool status_in1_request{false};
+  bool status_in6_request{false};
+  bool status_zone2_enabled{false};
+  bool pred_sc_switch{false};
+  bool sw_auto_adaptive{false};
+  bool sw_defrost_mit{false};
+  bool sw_smart_boost{false};
+  bool sw_force_dhw{false};
+
+  // Float sensors
+  float hp_feed_temp{NAN};
+  float hp_return_temp{NAN};
+  float outside_temp{NAN};
+  float compressor_frequency{NAN};
+  float flow_rate{NAN};
+  float computed_output_power{NAN};
+  float daily_computed_output_power{NAN};
+  float daily_total_energy_consumption{NAN};
+  float compressor_starts{NAN};
+  float runtime{NAN};
+  float wifi_signal_db{NAN};
+
+  float dhw_temp{NAN};
+  float dhw_flow_temp_target{NAN};
+  float dhw_flow_temp_drop{NAN};
+  float dhw_consumed{NAN};
+  float dhw_delivered{NAN};
+  float dhw_cop{NAN};
+
+  float heating_consumed{NAN};
+  float heating_produced{NAN};
+  float heating_cop{NAN};
+  float cooling_consumed{NAN};
+  float cooling_produced{NAN};
+  float cooling_cop{NAN};
+
+  float z1_flow_temp_target{NAN};
+  float z2_flow_temp_target{NAN};
+
+  // Number sensors with limits
+  struct NumData { float val{NAN}; float min{NAN}; float max{NAN}; float step{NAN}; };
+  NumData num_aa_setpoint_bias;
+  NumData num_max_flow_temp;
+  NumData num_min_flow_temp;
+  NumData num_max_flow_temp_z2;
+  NumData num_min_flow_temp_z2;
+  NumData num_hysteresis_z1;
+  NumData num_hysteresis_z2;
+  NumData pred_sc_time;
+  NumData pred_sc_delta;
+
+  // Climate data
+  struct ClimData { float curr{NAN}; float tar{NAN}; int action{-1}; int mode{-1}; };
+  ClimData virt_z1;
+  ClimData virt_z2;
+  ClimData room_z1;
+  ClimData room_z2;
+  ClimData flow_z1;
+  ClimData flow_z2;
+
+  // Selects & modes
+  float operation_mode{NAN};
+  int sel_heating_system_type{-1};
+  int sel_room_temp_source_z1{-1};
+  int sel_room_temp_source_z2{-1};
+  int sel_operating_mode_z1{-1};
+  int sel_operating_mode_z2{-1};
+  int sel_temp_source_z1{-1};
+  int sel_temp_source_z2{-1};
+
+  // Safe fixed-size character arrays for text sensors
+  char version[32]{0};
+};
+
 class EcodanDashboard : public Component, public AsyncWebHandler {
  public:
   void setup() override;
@@ -248,6 +330,12 @@ private:
   size_t history_head_{0};
   size_t history_count_{0};
   uint32_t last_history_time_{0};
+
+  // snapshot data to avoid concurrency issues
+  DashboardSnapshot current_snapshot_;
+  std::mutex snapshot_mutex_;
+  uint32_t last_snapshot_time_{0};
+  void update_snapshot_();
 
   void record_history_();
   void handle_history_request_(AsyncWebServerRequest *request);
