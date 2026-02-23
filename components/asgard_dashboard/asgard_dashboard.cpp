@@ -104,14 +104,14 @@ void EcodanDashboard::send_chunked_(AsyncWebServerRequest *request, const char *
 void EcodanDashboard::handle_root_(AsyncWebServerRequest *request) {
   // uint32_t free_heap = esp_get_free_heap_size();
   // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  ESP_LOGI(TAG, "handle_root_: \t\t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+  // ESP_LOGI(TAG, "handle_root_: \t\t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
   send_chunked_(request, "text/html", DASHBOARD_HTML_GZ, DASHBOARD_HTML_GZ_LEN, "no-cache");
 }
 
 void EcodanDashboard::handle_js_(AsyncWebServerRequest *request) {
   // uint32_t free_heap = esp_get_free_heap_size();
   // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  ESP_LOGI(TAG, "handle_js_: \t\t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+  // ESP_LOGI(TAG, "handle_js_: \t\t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
 
   const auto& url = request->url();
   const uint8_t *file_data = nullptr;
@@ -645,9 +645,9 @@ void EcodanDashboard::record_history_() {
 }
 
 void EcodanDashboard::handle_history_request_(AsyncWebServerRequest *request) {
-  uint32_t free_heap = esp_get_free_heap_size();
-  uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  ESP_LOGI(TAG, "history_request_: \t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
+  // uint32_t free_heap = esp_get_free_heap_size();
+  // uint32_t max_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  // ESP_LOGI(TAG, "history_request_: \t\tMemory Stats | Total Free: %u bytes | Largest Block: %u bytes", free_heap, max_block);
 
   httpd_req_t *req = *request;
   httpd_resp_set_status(req, "200 OK");
