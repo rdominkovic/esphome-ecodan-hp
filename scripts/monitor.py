@@ -10,6 +10,9 @@ import urllib.request
 from datetime import datetime
 
 ESP32_URL = "http://192.168.1.230/events"
+HA_URL = "http://localhost:8123"
+HA_TOKEN_FILE = os.path.join(os.path.expanduser("~"), ".claude", "projects",
+                             "C--Users-robert-esphome", "memory", "ha-token.txt")
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 LOG_FILE = os.path.join(LOG_DIR, "ecodan_log.csv")
 POLL_INTERVAL = 60  # seconds
@@ -62,7 +65,45 @@ OPTIONAL_BINARY_SENSORS = {
 
 ALL_BINARY = {**BINARY_SENSORS, **OPTIONAL_BINARY_SENSORS}
 
-CSV_COLUMNS = ["timestamp"] + list(SENSORS.values()) + list(BINARY_SENSORS.values()) + list(OPTIONAL_BINARY_SENSORS.values()) + ["delta_t"]
+CSV_COLUMNS = ["timestamp"] + list(SENSORS.values()) + list(BINARY_SENSORS.values()) + list(OPTIONAL_BINARY_SENSORS.values()) + ["delta_t", "room_temp"]
+
+
+def load_ha_token():
+    """Load HA long-lived access token from file."""
+    try:
+        with open(HA_TOKEN_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return None
+
+
+def fetch_room_temp(ha_token):
+    """Fetch averaged room temperature from HA (pushed by Tuya automation)."""
+    if not ha_token:
+        return None
+    # Three Tuya thermostats with 2x scaling bug: divide by 2, average 3 rooms
+    entities = [
+        "climate.dnevna_soba",
+        "climate.ured",
+        "climate.kupatilo",
+    ]
+    temps = []
+    for entity in entities:
+        try:
+            url = f"{HA_URL}/api/states/{entity}"
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {ha_token}",
+                "Content-Type": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                raw = float(data["attributes"]["current_temperature"])
+                temps.append(raw / 2)  # Tuya reports 2x actual
+        except Exception:
+            continue
+    if temps:
+        return round(sum(temps) / len(temps), 1)
+    return None
 
 
 def fetch_snapshot():
@@ -141,19 +182,24 @@ def write_row(sensors):
 
 def print_status(sensors):
     """Print a one-line status to console."""
+    def fmt(val, decimals=1):
+        return f"{val:.{decimals}f}" if isinstance(val, (int, float)) else "?"
+
     parts = [
-        f"Out:{sensors.get('outside_temp', '?')}C",
-        f"Tgt:{sensors.get('flow_target_temp', '?')}C",
-        f"Feed:{sensors.get('feed_temp', '?')}C",
-        f"Ret:{sensors.get('return_temp', '?')}C",
-        f"dT:{sensors.get('delta_t', '?')}C",
-        f"Hz:{sensors.get('compressor_hz', '?')}",
-        f"COP:{sensors.get('estimated_cop', '?')}",
-        f"hCOP:{sensors.get('heating_cop', '?')}",
-        f"Flow:{sensors.get('flow_rate_lmin', '?')}L/m",
+        f"Out:{fmt(sensors.get('outside_temp'))}C",
+        f"Tgt:{fmt(sensors.get('flow_target_temp'))}C",
+        f"Feed:{fmt(sensors.get('feed_temp'))}C",
+        f"Ret:{fmt(sensors.get('return_temp'))}C",
+        f"dT:{fmt(sensors.get('delta_t'))}C",
+        f"Hz:{fmt(sensors.get('compressor_hz'), 0)}",
+        f"COP:{fmt(sensors.get('estimated_cop'))}",
+        f"hCOP:{fmt(sensors.get('heating_cop'))}",
+        f"Flow:{fmt(sensors.get('flow_rate_lmin'))}L/m",
+        f"DHWt:{fmt(sensors.get('dhw_temp'))}C",
         f"Comp:{'ON' if sensors.get('compressor_on') else 'OFF'}",
         f"DHW:{'ON' if sensors.get('3way_valve_dhw') else 'HTG'}",
         f"SC:{'LOCK' if sensors.get('sc_lockout') else 'BOOST' if sensors.get('sc_predictive_boost') else 'ok'}",
+        f"Room:{fmt(sensors.get('room_temp'))}C",
     ]
     print(f"[{datetime.now():%H:%M:%S}] {' | '.join(parts)}")
 
@@ -199,11 +245,20 @@ def main():
     print(f"Logging to {LOG_FILE}")
     print("Press Ctrl+C to stop\n")
 
+    ha_token = load_ha_token()
+    if ha_token:
+        print("HA token loaded, room temp will be logged")
+    else:
+        print("No HA token found, room temp will be skipped")
+
     init_csv()
 
     while True:
         sensors = fetch_snapshot()
         if sensors:
+            room = fetch_room_temp(ha_token)
+            if room is not None:
+                sensors["room_temp"] = room
             write_row(sensors)
             print_status(sensors)
         else:

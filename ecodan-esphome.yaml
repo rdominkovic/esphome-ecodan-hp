@@ -16,28 +16,23 @@ api:
   reboot_timeout: 0s
 
 external_components:
-  - source: github://gekkekoe/esphome-ecodan-hp@main
+  - source:
+      type: local
+      path: components
     components: [ ecodan, optimizer, asgard_dashboard ]
-    refresh: always
 
 packages:
-  remote_package:
-    url: https://github.com/gekkekoe/esphome-ecodan-hp/
-    ref: main
-    refresh: always
-    files: [
-            confs/base.yaml,
-            confs/energy.yaml,
-            confs/cpu-monitoring.yaml,
-            confs/request-codes.yaml,
-            confs/auto-adaptive.yaml,
-            confs/esp32.yaml,
-            confs/zone1.yaml,
-            confs/server-control-z1.yaml,
-            confs/ecodan-labels-en.yaml,
-            confs/debug.yaml,
-            confs/wifi.yaml,
-           ]
+  base: !include confs/base.yaml
+  energy: !include confs/energy.yaml
+  cpu: !include confs/cpu-monitoring.yaml
+  requests: !include confs/request-codes.yaml
+  adaptive: !include confs/auto-adaptive.yaml
+  esp32: !include confs/esp32.yaml
+  zone1: !include confs/zone1.yaml
+  server: !include confs/server-control-z1.yaml
+  labels: !include confs/ecodan-labels-en.yaml
+  debug: !include confs/debug.yaml
+  wifi: !include confs/wifi.yaml
 
 logger:
   level: DEBUG

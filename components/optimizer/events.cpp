@@ -137,8 +137,8 @@ namespace esphome
 
         float Optimizer::enforce_step_down(const ecodan::Status &status, float actual_flow_temp, float calculated_flow) 
         {
-            const float MAX_FEED_STEP_DOWN = 1.0f;
-            const float MAX_FEED_STEP_DOWN_ADJUSTMENT = 0.5f;
+            const float MAX_FEED_STEP_DOWN = 1.8f;
+            const float MAX_FEED_STEP_DOWN_ADJUSTMENT = 1.0f;
             
             if ((actual_flow_temp - calculated_flow) > MAX_FEED_STEP_DOWN)
             {

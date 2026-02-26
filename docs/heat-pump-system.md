@@ -328,18 +328,61 @@ Natural convection from bare copper pipe, using standard heat transfer coefficie
 
 ## Current Settings
 
-### Weather Compensation Curve (Heating)
+### Flow Temperature Control
+
+**Active mode: Auto-Adaptive Delta-T Control** (switched from Weather Compensation on Feb 26)
+
+The ESP32 optimizer dynamically calculates flow target = return_temp + delta_T, where delta_T depends on room temperature error and outdoor conditions. This replaces the static weather compensation curve. Using local fork with custom tuning (see Firmware Modifications below).
+
+| Parameter | Value | Notes |
+| --------- | ----- | ----- |
+| Operating mode | Heat Flow Temperature | Required for auto-adaptive |
+| Auto-Adaptive Control | ON | ESP32 optimizer manages flow setpoint |
+| Heating System Type | Underfloor Heating | UFH profile: delta-T range 1.0-6.5 C, smoothstep error scaling |
+| Room temp target | 23 C | Desired indoor temperature |
+| Room temp source | HA/REST API | HA automation pushes avg of 3 Tuya thermostats every 5 min |
+| Room temp feedback | ~23 C | Average of dnevna soba, ured, kupatilo (Tuya values / 2) |
+| Max heating flow | 40 C | Upper limit for optimizer |
+| Min heating flow | 25 C | Lower limit for optimizer |
+| Setpoint bias | 0 C | Neutral, can shift demand for tariffs/solar |
+| Smart Boost | OFF | Enable if room temp stagnates |
+| Defrost Mitigation | OFF | Enable if post-defrost issues occur |
+
+### Firmware Modifications (local fork)
+
+Using local components instead of GitHub source. Three key changes to the optimizer:
+
+**1. Reduced UFH base minimum delta_T** (`optimizer.cpp`)
+- Changed from 2.0 C to 1.0 C for UFH profile
+- At mild outdoor temps (10-15 C), original 2.0 C forced unnecessarily high flow targets
+- Cold weather behavior unchanged (both converge to 4.0 C via cold_factor)
+
+**2. Proportional delta_T reduction when room above target** (`optimizer.cpp`)
+- Original: when room > target, delta_T = base_min (fixed floor of 1.0 C)
+- Modified: delta_T = max(0, base_min + error), where error is negative when room > target
+- At room +0.3 above target: delta_T = 0.7 (reduced Hz, less heating)
+- At room +1.0 above target: delta_T = 0.0 (compressor stops)
+- Enables gradual modulation instead of binary on/off, ideal for UFH thermal mass
+
+**3. Relaxed enforce_step_down protection** (`events.cpp`)
+- MAX_FEED_STEP_DOWN: 1.0 C → 1.8 C (threshold before protection activates)
+- MAX_FEED_STEP_DOWN_ADJUSTMENT: 0.5 C → 1.0 C (adjustment when triggered)
+- Original values created a circular dependency: high target → high feed → high return → high target
+- Relaxed values allow faster convergence to equilibrium while maintaining compressor protection
+
+**Previous Weather Compensation Curve (inactive, kept for reference):**
 
 | Outdoor temp | Flow water temp |
 | ------------ | --------------- |
 | -10 C        | 40 C            |
-| +15 C        | 28 C            |
+| +15 C        | 29 C            |
 
-Linear interpolation between these two points. Offset: **+1 C** (actual flow temp is 1C above curve value).
+Linear interpolation, offset 0 C. Replaced because outdoor unit halts compressor at +2 C above static setpoint, causing 28 min ON / 4 min OFF cycling at 60+ Hz.
 
 ### DHW (Domestic Hot Water)
 
-- **Target temperature**: 43 C
+- **Target temperature**: 50 C (raised from 43 C on Feb 23)
+- **Restart threshold**: -10 C (restarts when tank drops to 40 C)
 - **Schedule**: 19:00 - 23:00 and 05:00 - 07:00 (OFF outside these windows)
 - **Mode**: Eco
 - **Legionella prevention**: 60 C (periodic)
@@ -434,7 +477,7 @@ DIP SW1 code: 0026, DIP SW2 code: 008C.
 
 | Parameter | Value | Default | Range | Notes |
 | --------- | ----- | ------- | ----- | ----- |
-| Pump speed (heating) | **5** | 5 | 1-5 | Tested 5 → 4 → 3 → reverted to 5 (see changelog) |
+| Pump speed (heating) | **5** | 5 | 1-5 | Tested 5 → 4 → 3 → all reverted to 5. Speed 4: marginal delta-T gain, 3x cycling. Speed 3: severe cycling. Speed 5 confirmed optimal. |
 | Pump speed (DHW) | **5** | 5 | 1-5 | Unchanged, max flow for DHW heat exchanger |
 | Thermo diff. lower limit | **-7 C** | -5 | -9 to -1 | Controls restart threshold below target flow temp |
 | Thermo diff. upper limit | +5 C | +5 | +3 to +5 | Controls shutdown threshold above target flow temp |
@@ -452,9 +495,9 @@ Software-based protection in the ESPHome ecodan-hp integration (package `confs/a
 
 | Parameter | Value | Default | Range | Notes |
 | --------- | ----- | ------- | ----- | ----- |
-| SC: Lockout Duration | **15 min** | 0 | 0, 15, 30, 45, 60 | Enabled Feb 21 08:47 |
-| SC: Minimum On Time | 5 min | 5 | 1-20 | Compressor run shorter than this triggers lockout |
-| SC: Predictive Prevention | **ON** | OFF | ON/OFF | Enabled Feb 21 08:47. Boosts flow temp +0.5 C |
+| SC: Lockout Duration | **15 min** | 0 | 0, 15, 30, 45, 60 | Reduced from 45 min Feb 24 |
+| SC: Minimum On Time | **20 min** | 5 | 1-60 | Reduced from 40 min Feb 24 |
+| SC: Predictive Prevention | **OFF** | OFF | ON/OFF | Disabled Feb 26. Conflicts with AA mode: boost has no restore path when AA is active, causing runaway target increase. |
 | SC: High Delta Threshold | 1.0 C | 1.0 | 1.0-3.0 | Overshoot above requested flow temp to trigger timer |
 | SC: High Delta Duration | 4.0 min | 4.0 | 1.0-5.0 | How long overshoot must persist before boost |
 
@@ -487,7 +530,7 @@ Configuration via ESPHome web UI at `http://192.168.1.230/` or Home Assistant.
 
 | Sensor                   | Value           |
 | ------------------------ | --------------- |
-| Outside temperature      | ~0 C (sensor reads -4, offset suspected) |
+| Outside temperature      | ~0 C                |
 | HP feed temperature      | 36.5 C          |
 | HP return temperature    | 31 C            |
 | HP delta T               | **5.5 C**       |
@@ -519,7 +562,7 @@ Configuration via ESPHome web UI at `http://192.168.1.230/` or Home Assistant.
 | Starts/hour | 0.81 | 1.75 | 2.14 |
 | Inst. COP avg | 2.38 | 2.06 | 1.49 |
 
-Notes: Speed 4 and 3 data collected during colder weather — COP and cycling differences are partly due to outdoor temperature, not only pump speed. Outdoor temp sensor may read 3-4 C lower than actual.
+Notes: Speed 4 and 3 data collected during colder weather — COP and cycling differences are partly due to outdoor temperature, not only pump speed.
 
 **DHW Cycle** (Feb 20, 05:00-05:14): 14 minutes, 1 cycle in 24h. DHW temp: 37-45 C.
 
@@ -567,10 +610,6 @@ Tested pump speeds 5, 4, and 3. Speed 3 improved delta T (3.5-5.5 C) and cut pum
 
 All 11 circuit flow meters (topometers) are set to the same value regardless of circuit length. Shorter circuits (bathroom 51m) get the same flow as longer ones (kitchen 100m), causing uneven heat distribution. To be addressed after pump speed optimization is validated.
 
-#### 8. Outside Temperature Sensor Offset
-
-Outside temp sensor reads approximately 3-4 C lower than actual. At actual ~0 C, sensor reads -3 to -4 C. Impact on weather compensation curve: system targets slightly higher flow temps than necessary, reducing COP.
-
 ### Eliminated Suspects
 
 - **Mixing valve**: No mixing valve installed (SW2-6 OFF, code 177 = 0, menu shows "Invalid"). The 25 C readings on Z1 Feed/Return were from unconnected optional thermistors (THW6/THW7 absent).
@@ -590,9 +629,7 @@ Outside temp sensor reads approximately 3-4 C lower than actual. At actual ~0 C,
 
 5. **Balance manifold flow meters** — Adjust topometers proportional to circuit length (longer circuits get more flow). Currently all set equally.
 
-6. **Investigate outside temp sensor offset** — Reads ~3-4 C low. Consider applying offset in weather compensation curve or ESPHome config.
-
-7. **Review DHW schedule** — Consider whether a single longer window (e.g., 19:00-07:00) might reduce reheating losses vs two separate windows.
+6. **Review DHW schedule** — Consider whether a single longer window (e.g., 19:00-07:00) might reduce reheating losses vs two separate windows.
 
 8. **Install THW6/THW7 thermistors** — Optional but recommended. Installing zone thermistors (PAC-TH011-E) would give real zone flow/return data for monitoring actual heat delivery to the underfloor circuits.
 
@@ -607,3 +644,20 @@ Outside temp sensor reads approximately 3-4 C lower than actual. At actual ~0 C,
 | Feb 21 | 08:32 | Pump speed heating 3 → 5 | Reverted to speed 5 after overnight data showed speed 3 causes compressor cycling (0↔98 Hz sawtooth, 2.14 starts/hr, COP 1.49) |
 | Feb 21 | ~08:47 | SC lockout 0 → 15 min | Enabled short-cycle lockout protection via ESPHome web UI |
 | Feb 21 | ~08:47 | SC predictive prevention OFF → ON | Enabled predictive flow temp boost (+0.5 C) to prevent short cycles |
+| Feb 22 | 10:45 | SC limits increased & strategy update | Increased `Minimum On-Time` limit to 60m in YAML. Set `Minimum On-Time` to 40m and `Lockout Duration` to 45m in HA to force longer cycles. |
+| Feb 22 | 11:15 | Thermo diff. lower limit -7 → -9 | Maximized FTC deadband to further extend compressor OFF periods and improve stability. |
+| Feb 23 | ~16:30 | Weather comp. offset +1 → 0 | Removed +1 C flow temp offset to slightly lower flow targets across all outdoor temps, aiming to extend compressor ON cycles. |
+| Feb 23 | ~20:30 | DHW target 43 → 50 C, restart threshold -10 C | DHW was stopping at 40 C (unexplained early cutoff at 19:17). Raised target to 50 C and set restart threshold to -10 C. DHW successfully heated to 50.5 C in 42 min (20:42-21:24). |
+| Feb 24 | ~07:12 | SC Lockout 45 → 15 min, Minimum On-Time 40 → 20 min | Aggressive lockout was causing cold floor at restart → high-Hz cold starts → overshoot → stop. Shorter lockout keeps floor warmer, targeting stable 30-40 Hz operation. |
+| Feb 24 | ~10:30 | Weather comp warm end 28 → 30 C (offset stays 0) | Rooms were cooler with offset 0 on old curve. Raising warm end to 30 C raises flow target by ~1.6 C at +10 C outdoor, ~1.4 C at +7 C, without changing cold-weather behaviour. |
+| Feb 25 | 21:32 | Pump speed heating 5 → 4 | Testing lower pump speed again. Previous speed 4 test (Feb 20) showed flow 18→16 L/min, pump watts 59→39 W, delta T 1.8→2.2 C. Current baseline at speed 5: delta T avg 1.8 C, COP 2.34, 0.84 starts/hr. Watching for compressor stability. |
+| Feb 26 | ~07:00 | Pump speed heating 4 → 5 | Reverted after overnight test. Speed 4 results: delta-T only +0.2 C (2.3→2.5), but cycling nearly tripled (0.59→1.54 starts/hr), COP dropped (2.19→2.06). Pump watt savings (17W) not worth the cycling penalty. Speed 5 confirmed optimal. |
+| Feb 26 | ~09:30 | Weather comp warm end 30 → 29 C | House was getting too warm at +15 C outdoor. |
+| Feb 26 | ~09:45 | Tuya Smart Life integration added to HA | Connected MOES BHT-002 thermostats and Tuya temp sensor. Thermostat temps need /2 correction (Tuya scaling bug). Created HA automation to push avg room temp (dnevna+ured+kupatilo)/2/3 to ESP32 every 5 min. |
+| Feb 26 | ~11:15 | Switched to Auto-Adaptive mode | Changed operating mode from Heat Target Temperature to Heat Flow Temperature. Enabled Auto-Adaptive Control. Set room target 24 C, max flow 40 C, heating system type UFH, room temp source HA/REST API. Immediate result: compressor running continuously at 24-38 Hz with optimizer-managed flow target, vs previous 60+ Hz cycling. |
+| Feb 26 | ~11:30 | Room target 24 → 23 C | Robert prefers 23 C |
+| Feb 26 | ~11:57 | SC Predictive Prevention ON → OFF | Predictive boost conflicts with AA mode: boost pushes target up but has no restore path (stand_alone_predictive_active=false when AA enabled), causing runaway target increase and high pressure cutout at 60 C condensing. |
+| Feb 26 | ~12:55 | Switched to local components | Changed ecodan-esphome.yaml external_components from GitHub to local path for firmware customization. |
+| Feb 26 | ~13:00 | UFH base_min_delta_t 2.0 → 1.0 | Hardcoded in optimizer.cpp. Original 2.0 C forced target too high at mild outdoor temps (34 C target at 12 C outdoor vs ideal 28-30 C). Cold weather unchanged. |
+| Feb 26 | ~13:25 | enforce_step_down relaxed | MAX_FEED_STEP_DOWN 1.0→1.8, adjustment 0.5→1.0. Original values created circular dependency keeping system at high equilibrium. |
+| Feb 26 | ~14:44 | Proportional delta_T when room > target | delta_T = max(0, base_min + error) instead of fixed base_min. Enables gradual Hz reduction as room exceeds target. At +0.3 C: Hz drops from 34 to 26. At +1.0 C: compressor stops. |
