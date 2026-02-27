@@ -416,7 +416,7 @@ namespace esphome
             {
                 // UFH
                 base_min_delta_t = 1.0f;
-                min_delta_cold_limit = 4.0f;
+                min_delta_cold_limit = 6.0f;
                 max_delta_t = 6.5f;
                 max_error_range = 2.0f;
                 defrost_memory_ms = 35 * 60 * 1000UL;
@@ -445,8 +445,8 @@ namespace esphome
             float clamped_outside_temp = std::clamp(actual_outside_temp, COLD_WEATHER_TEMP, MILD_WEATHER_TEMP);
             float cold_factor = (MILD_WEATHER_TEMP - clamped_outside_temp) / (MILD_WEATHER_TEMP - COLD_WEATHER_TEMP);
 
-            // use quadratic, and expand range to 1.5
-            cold_factor *= cold_factor * 1.5f;
+            // use quadratic scaling for gradual cold response
+            cold_factor *= cold_factor * 0.5f;
 
             ESP_LOGD(OPTIMIZER_TAG, "[*] Starting auto-adaptive cycle, z2 independent: %d, has_cooling: %d, cold factor: %.2f, min delta T: %.2f, max delta T: %.2f", 
                 status.has_independent_zone_temps(), status.has_cooling(), cold_factor, base_min_delta_t, max_delta_t);

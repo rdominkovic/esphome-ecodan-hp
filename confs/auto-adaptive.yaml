@@ -203,7 +203,7 @@ number:
     restore_value: true
     initial_value: 5 # minutes
     min_value: 1
-    max_value: 20
+    max_value: 60
     step: 1
   - platform: template
     id: predictive_short_cycle_high_delta_time_window
