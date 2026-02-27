@@ -179,22 +179,26 @@ number:
     id: temperature_feedback_z1
     name: ${temperature_feedback} z1
     unit_of_measurement: "°C"
-    optimistic: true
     restore_value: true
     initial_value: 20.0
     min_value: -50
     max_value: 100
     step: 0.1
+    set_action:
+      - lambda: |-
+          id(temperature_feedback_z1).publish_state(roundf(x * 10.0f) / 10.0f);
   - platform: template
     id: temperature_feedback_z2
     name: ${temperature_feedback} z2
     unit_of_measurement: "°C"
-    optimistic: true
     restore_value: true
     initial_value: 20.0
     min_value: -50
     max_value: 100
     step: 0.1
+    set_action:
+      - lambda: |-
+          id(temperature_feedback_z2).publish_state(roundf(x * 10.0f) / 10.0f);
 
   - platform: template
     id: minimum_compressor_on_time

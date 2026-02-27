@@ -241,6 +241,7 @@ namespace esphome
 
             if (is_heating_mode && is_heating_active)
             {
+                bool suppress_heating = false;
                 if (isnan(actual_return_temp))
                 {
                     ESP_LOGE(OPTIMIZER_TAG, "Z%d HEATING (Delta T): FAILED, actual_return_temp is NAN. Reverting to %.2f°C.", (i + 1), zone_min_flow_temp);
@@ -285,7 +286,12 @@ namespace esphome
                     else
                     {
                         calculated_flow = actual_return_temp + target_delta_t;
-                        if (error < 0.0f) {
+                        if (error < -0.5f) {
+                            calculated_flow = zone_min_flow_temp;
+                            suppress_heating = true;
+                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Room %.1f°C above target. Suppressing heating (flow=%.1f°C).",
+                                (i+1), -error, zone_min_flow_temp);
+                        } else if (error < 0.0f) {
                             float reduced_delta = fmax(0.0f, base_min_delta_t + error);
                             calculated_flow = actual_return_temp + reduced_delta;
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.1f). Reduced delta T: %.1f (base: %.1f).",
@@ -316,7 +322,10 @@ namespace esphome
                     }
                 }
 
-                if (this->is_post_dhw_window(status)) {
+                if (suppress_heating) {
+                    calculated_flow = this->clamp_flow_temp(calculated_flow, zone_min_flow_temp, zone_max_flow_temp);
+                }
+                else if (this->is_post_dhw_window(status)) {
                     calculated_flow = this->clamp_flow_temp(calculated_flow, zone_min_flow_temp, zone_max_flow_temp);
                     // step down limit to avoid compressor halt (it seems to be triggered when delta actual_flow_temp - calculated_flow >= 2.0)
                     // we need to step down AFTER clamping, since dhw could just have finished
