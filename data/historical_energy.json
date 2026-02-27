@@ -1,0 +1,19 @@
+{
+    "2026-01": {
+        "htg_consumed_kwh": 1106,
+        "dhw_consumed_kwh": 175,
+        "consumed_kwh": 1282,
+        "htg_delivered_kwh": 2240,
+        "dhw_delivered_kwh": 315,
+        "delivered_kwh": 2556
+    },
+    "2026-02": {
+        "htg_consumed_kwh": 628,
+        "dhw_consumed_kwh": 99,
+        "consumed_kwh": 728,
+        "htg_delivered_kwh": 1431,
+        "dhw_delivered_kwh": 198,
+        "delivered_kwh": 1629,
+        "_note": "Feb 1-25 only (before daily CSV logging started Feb 26)"
+    }
+}
