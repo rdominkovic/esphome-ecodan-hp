@@ -15,6 +15,32 @@ ota:
 api:
   reboot_timeout: 0s
 
+mqtt:
+  broker: 92.4.217.132
+  port: 8883
+  username: "ecodan"
+  password: "hD3NvzjoYiw66LV3YvRGpA=="
+  certificate_authority: |
+    -----BEGIN CERTIFICATE-----
+    MIIDEzCCAfugAwIBAgIUHXb129x2Fkt07262HThcq2YQchgwDQYJKoZIhvcNAQEL
+    BQAwGTEXMBUGA1UEAwwOZWNvZGFuLW1xdHQtY2EwHhcNMjYwMjI3MDc0MzA4WhcN
+    MzYwMjI1MDc0MzA4WjAZMRcwFQYDVQQDDA5lY29kYW4tbXF0dC1jYTCCASIwDQYJ
+    KoZIhvcNAQEBBQADggEPADCCAQoCggEBANcxyqGOsgK0iPKnnh6g9erYSk8iFfr1
+    moWOusfx097czqXtn+gh1iMgwsHVTN8r7lbehqzfJ+jB2Ck53CHFB2ioOQFDTy2g
+    kKkafIrcsIFF00DykUhju473RkS82Ji6pVCdBd8wLdxkY07QbeTQnlDZbG0nV3rp
+    J3ke2IzNt7UhNlavOkHexFqyyaui7SQs0nmiSHmU71i7ZGl6bffd2ktBtjr61YqE
+    iVmd9a6w0CBkY6XxxRfI2eTdnWE7dkYuCkXGYNmZWic132yNw++ujovzchNfr+SB
+    O/mqZIcAK7ZwkoTeeM51Cpky54lv9ywe8QOWtW6PBSr1TOGQLZidDcsCAwEAAaNT
+    MFEwHQYDVR0OBBYEFMAXqAzRl37tsDEqa1G1a/qYWKaSMB8GA1UdIwQYMBaAFMAX
+    qAzRl37tsDEqa1G1a/qYWKaSMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQEL
+    BQADggEBAMG+VoGy+TujH3/B+apDjM7d/j/YNo/hIbyM0SZI3NGBexmrdcdA+20v
+    SYj4aIaDpu0TkytpGNZ25CooXr6y0zGMKkHxg3hP163OuJW+7xLbkKS4Etyoiql7
+    Qo3rzJqRzbtqH8X4qt/tuLBIg1FGME8sQGu1sd/Aw2Km25nZhQjOEzKuzNu6paqI
+    LVYuVllVRxQy8gXTGsvOocE0X7YQyOzq2WcQTK/MjnXmlSrJFYfVQY9MsYaGUeVj
+    qCUlOtudv1XLSR0n1dxgJnbVN+WR82bW7w0+jVGZM6WrlUjpjYZR+xFw69J3YpW3
+    AYjY+7IfVwgh+1W/rMQlZL3XED0RuFE=
+    -----END CERTIFICATE-----
+
 external_components:
   - source:
       type: local
