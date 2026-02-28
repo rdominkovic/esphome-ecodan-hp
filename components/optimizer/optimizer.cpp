@@ -292,10 +292,10 @@ namespace esphome
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room %.1f°C above target. Suppressing heating (flow=%.1f°C).",
                                 (i+1), -error, zone_min_flow_temp);
                         } else if (error < 0.0f) {
-                            float reduced_delta = fmax(0.0f, base_min_delta_t + error);
+                            float reduced_delta = fmax(0.0f, dynamic_min_delta_t + error);
                             calculated_flow = actual_return_temp + reduced_delta;
-                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.1f). Reduced delta T: %.1f (base: %.1f).",
-                                (i+1), error, reduced_delta, base_min_delta_t);
+                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.1f). Reduced delta T: %.1f (dynamic min: %.1f).",
+                                (i+1), error, reduced_delta, dynamic_min_delta_t);
                         }
                         calculated_flow = this->round_nearest(calculated_flow);
 

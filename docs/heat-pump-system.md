@@ -339,9 +339,9 @@ The ESP32 optimizer dynamically calculates flow target = return_temp + delta_T, 
 | Operating mode | Heat Flow Temperature | Required for auto-adaptive |
 | Auto-Adaptive Control | ON | ESP32 optimizer manages flow setpoint |
 | Heating System Type | Underfloor Heating | UFH profile: delta-T range 1.0-6.5 C, smoothstep error scaling |
-| Room temp target | 23 C | Desired indoor temperature |
+| Room temp target | 22.5 C | Desired indoor temperature (lowered from 23 C on Feb 27) |
 | Room temp source | HA/REST API | HA automation pushes avg of 3 Tuya thermostats every 5 min |
-| Room temp feedback | ~23 C | Average of dnevna soba, ured, kupatilo (Tuya values / 2) |
+| Room temp feedback | ~22.8 C | Average of dnevna soba, ured, kupatilo (Tuya values / 2) |
 | Max heating flow | 40 C | Upper limit for optimizer |
 | Min heating flow | 25 C | Lower limit for optimizer |
 | Setpoint bias | 0 C | Neutral, can shift demand for tariffs/solar |
@@ -359,10 +359,13 @@ Using local components instead of GitHub source. Three key changes to the optimi
 
 **2. Proportional delta_T reduction when room above target** (`optimizer.cpp`)
 - Original: when room > target, delta_T = base_min (fixed floor of 1.0 C)
-- Modified: delta_T = max(0, base_min + error), where error is negative when room > target
-- At room +0.3 above target: delta_T = 0.7 (reduced Hz, less heating)
-- At room +1.0 above target: delta_T = 0.0 (compressor stops)
-- Enables gradual modulation instead of binary on/off, ideal for UFH thermal mass
+- Modified: delta_T = max(0, dynamic_min_delta_t + error), where error is negative when room > target
+- Uses dynamic_min_delta_t (accounts for cold_factor) instead of base_min_delta_t (fixed 1.0 C)
+- This prevents the flow target from dropping too low in cold weather, avoiding compressor cycling
+- At OT 3 C: dynamic_min = 1.9, so room +0.3 above target gives delta_T = 1.6 (enough headroom)
+- At OT 13 C: dynamic_min = 1.0, so room +0.3 above target gives delta_T = 0.7 (same as before)
+- The cold_factor quadratic scaling ensures the fix only matters when it's cold
+- Suppression deadband (room > target + 0.5 C) still sets flow to minimum, unchanged
 
 **3. Relaxed enforce_step_down protection** (`events.cpp`)
 - MAX_FEED_STEP_DOWN: 1.0 C → 1.8 C (threshold before protection activates)
@@ -664,3 +667,5 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Feb 26 | ~23:45 | cold_factor multiplier 1.5 → 0.5 | Evening cycling at OT 4-7 C: cold_factor squared × 1.5 produced delta_T 2.88 at OT=5 C, pushing condensing to 52 C → outdoor unit protection halt. Reduced multiplier to 0.5 gives delta_T 1.63 at OT=5 C. |
 | Feb 26 | ~23:45 | min_delta_cold_limit 4.0 → 6.0 (UFH) | Restored upstream default. Previous reduction to 4.0 was unnecessarily aggressive with the new 0.5 multiplier. |
 | Feb 27 | ~07:20 | Daily energy reporting script added | `scripts/daily_energy.py` generates Excel report from CSV logs with daily COP, consumed/delivered breakdown. Uses daily_max() to handle midnight counter reset race condition. |
+| Feb 27 | ~19:00 | Room target 23 → 22.5 C | 23 C was too warm in mild weather (OT 10+ C) |
+| Feb 28 | ~09:15 | reduced_delta: base_min → dynamic_min | **Root cause fix for overnight cycling.** Feb 28 00:00-08:00: 9 cycles (37 min ON / 4 min OFF, Hz 40-50), vs stable 23:00-01:50 run at 26-30 Hz. Problem: when room (22.8) > target (22.5), reduced_delta used base_min_delta_t (1.0) ignoring cold_factor. At OT 3 C, delta_T = max(0, 1.0-0.3) = 0.7 → flow target 32.2 C → only 2.0 C headroom before outdoor unit +2 C protection → compressor shutdown after ~35 min. Fix: use dynamic_min_delta_t (1.9 at OT 3 C) → delta_T = 1.6 → flow target 33.1 C → 4.0 C headroom → continuous operation. At warm OT (12-13 C), dynamic_min ≈ 1.0-1.1, so behavior is unchanged. |
