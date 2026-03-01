@@ -350,7 +350,7 @@ The ESP32 optimizer dynamically calculates flow target = return_temp + delta_T, 
 
 ### Firmware Modifications (local fork)
 
-Using local components instead of GitHub source. Three key changes to the optimizer:
+Using local components instead of GitHub source. Four key changes to the optimizer:
 
 **1. Reduced UFH base minimum delta_T** (`optimizer.cpp`)
 - Changed from 2.0 C to 1.0 C for UFH profile
@@ -362,16 +362,74 @@ Using local components instead of GitHub source. Three key changes to the optimi
 - Modified: delta_T = max(0, dynamic_min_delta_t + error), where error is negative when room > target
 - Uses dynamic_min_delta_t (accounts for cold_factor) instead of base_min_delta_t (fixed 1.0 C)
 - This prevents the flow target from dropping too low in cold weather, avoiding compressor cycling
-- At OT 3 C: dynamic_min = 1.9, so room +0.3 above target gives delta_T = 1.6 (enough headroom)
-- At OT 13 C: dynamic_min = 1.0, so room +0.3 above target gives delta_T = 0.7 (same as before)
-- The cold_factor quadratic scaling ensures the fix only matters when it's cold
+- At OT 3 C: dynamic_min = 4.0, so room +0.3 above target gives delta_T = 3.7 (enough headroom)
+- At OT 13 C: dynamic_min = 1.5, so room +0.3 above target gives delta_T = 1.2 (minimal warm weather impact)
 - Suppression deadband (room > target + 0.5 C) still sets flow to minimum, unchanged
 
-**3. Relaxed enforce_step_down protection** (`events.cpp`)
+**3. Linear cold_factor scaling** (`optimizer.cpp`)
+- Upstream: `cold_factor *= cold_factor * 1.5` (quadratic, aggressive at cold temps)
+- First attempt (Feb 26): `cold_factor *= cold_factor * 0.5` (quadratic, reduced multiplier)
+- Final (Mar 1): removed quadratic dampening entirely, cold_factor is linear `(15 - OT) / 20`
+- Root cause: quadratic scaling dampened cold_factor too much at OT 3-8 C, producing flow targets in the 30-32 C "dead zone" where the outdoor unit trips on +2 C overshoot
+- COP data confirmed: target 31-32 C has worst COP (2.44-2.68), while 34-35 C has best (3.24)
+- Cycling vs continuous overnight: COP 2.07 (Hz avg 50) vs COP 2.88 (Hz avg 35) — 39% COP penalty from cycling
+- See "COP Analysis by Flow Target" section below for full data
+
+| OT | Quadratic (old) | Linear (new) | dynamic_min_delta old | new | Flow target old (ret=29) | new |
+|----|-----------------|-------------|----------------------|-----|------------------------|-----|
+| 15 C | 0.000 | 0.000 | 1.0 | 1.0 | 30.0 | 30.0 |
+| 13 C | 0.005 | 0.100 | 1.0 | 1.5 | 30.0 | 30.5 |
+| 10 C | 0.031 | 0.250 | 1.2 | 2.2 | 30.2 | 31.2 |
+| 7 C | 0.080 | 0.400 | 1.4 | 3.0 | 30.4 | 32.0 |
+| 5 C | 0.125 | 0.500 | 1.6 | 3.5 | 30.6 | 32.5 |
+| 3 C | 0.180 | 0.600 | 1.9 | 4.0 | 30.9 | 33.0 |
+| 0 C | 0.281 | 0.750 | 2.4 | 4.8 | 31.4 | 33.8 |
+| -5 C | 0.500 | 1.000 | 3.5 | 6.0 | 34.0 | 36.5 |
+
+Warm weather safety: at OT >= 15 C no change. At OT 10-14 C, room is above target 91% of time so reduced_delta and suppression deadband dominate behavior. Suppression threshold (error < -0.5 C) unchanged.
+
+**4. Relaxed enforce_step_down protection** (`events.cpp`)
 - MAX_FEED_STEP_DOWN: 1.0 C → 1.8 C (threshold before protection activates)
 - MAX_FEED_STEP_DOWN_ADJUSTMENT: 0.5 C → 1.0 C (adjustment when triggered)
 - Original values created a circular dependency: high target → high feed → high return → high target
 - Relaxed values allow faster convergence to equilibrium while maintaining compressor protection
+
+### COP Analysis by Flow Target (data from Feb 21 - Mar 1)
+
+Analysis of 2121 heating-only readings (compressor ON, no DHW, no defrost).
+
+**COP by flow target temperature (1 C buckets):**
+
+| Target | Readings | COP avg | Hz avg | Notes |
+|--------|----------|---------|--------|-------|
+| 28 C | 13 | 3.85 | 26 | Small sample |
+| 30 C | 185 | 3.19 | 31 | Good when stable, rare |
+| 31 C | 260 | **2.68** | 43 | **Dead zone - cycling** |
+| 32 C | 372 | **2.44** | 40 | **Dead zone - cycling** |
+| 33 C | 666 | 2.81 | 35 | Transition |
+| 34 C | 399 | **3.24** | 37 | **Sweet spot** |
+| 35 C | 123 | **3.24** | 42 | **Sweet spot** |
+| 36 C | 35 | 3.12 | 40 | Good |
+
+**COP by compressor frequency:**
+
+| Hz range | Readings | COP avg | Notes |
+|----------|----------|---------|-------|
+| 20-30 | 431 | **3.80** | Best efficiency |
+| 30-40 | 826 | 3.03 | Good |
+| 40-50 | 602 | 2.27 | Poor |
+| 50-60 | 208 | 2.30 | Poor |
+| 60-70 | 37 | 2.01 | Bad |
+| 70-80 | 17 | 1.88 | Worst |
+
+**Cycling vs continuous (overnight periods):**
+
+| Mode | Readings | COP avg | Hz avg |
+|------|----------|---------|--------|
+| Continuous (>60 min) | 537 | **2.88** | 35 |
+| Cycling (<60 min) | 446 | **2.07** | 50 |
+
+Key insight: target 34-35 C has BETTER COP than 30-31 C despite higher feed temperature. The COP benefit of lower Hz (30-37 vs 40-56) and continuous operation outweighs the penalty of slightly higher flow temperature.
 
 **Previous Weather Compensation Curve (inactive, kept for reference):**
 
@@ -669,3 +727,4 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Feb 27 | ~07:20 | Daily energy reporting script added | `scripts/daily_energy.py` generates Excel report from CSV logs with daily COP, consumed/delivered breakdown. Uses daily_max() to handle midnight counter reset race condition. |
 | Feb 27 | ~19:00 | Room target 23 → 22.5 C | 23 C was too warm in mild weather (OT 10+ C) |
 | Feb 28 | ~09:15 | reduced_delta: base_min → dynamic_min | **Root cause fix for overnight cycling.** Feb 28 00:00-08:00: 9 cycles (37 min ON / 4 min OFF, Hz 40-50), vs stable 23:00-01:50 run at 26-30 Hz. Problem: when room (22.8) > target (22.5), reduced_delta used base_min_delta_t (1.0) ignoring cold_factor. At OT 3 C, delta_T = max(0, 1.0-0.3) = 0.7 → flow target 32.2 C → only 2.0 C headroom before outdoor unit +2 C protection → compressor shutdown after ~35 min. Fix: use dynamic_min_delta_t (1.9 at OT 3 C) → delta_T = 1.6 → flow target 33.1 C → 4.0 C headroom → continuous operation. At warm OT (12-13 C), dynamic_min ≈ 1.0-1.1, so behavior is unchanged. |
+| Mar 1 | ~09:15 | cold_factor: quadratic → linear | **Eliminated the 30-32 C dead zone.** Overnight Mar 1: 11 compressor starts (1.1/h), 30 min ON / 4 min OFF cycling at OT 3-5 C. Root cause: quadratic dampening (`cold_factor *= cold_factor * 0.5`) suppressed cold_factor too aggressively at moderate cold — OT 5 C gave cf=0.125, dynamic_min=1.6, target=30.6 C. At this target, compressor overshoots by 2 C within 30 min, triggering outdoor unit protection. After defrost when OT dropped to 1-2 C, target naturally rose to 33-35 C and compressor ran 160 min continuously at 30-36 Hz. COP analysis of 2121 readings confirmed: target 31-32 C has worst COP (2.44-2.68, Hz 40-43), while 34-35 C has best COP (3.24, Hz 37-42). Cycling periods show COP 2.07 vs continuous 2.88 (39% penalty). Fix: removed quadratic, cold_factor is now linear `(15 - OT) / 20`. At OT 5 C: cf=0.50, dynamic_min=3.5, target=32.5 C. At OT 3 C: cf=0.60, dynamic_min=4.0, target=33.0 C — directly into the optimal COP zone. Warm weather impact minimal: at OT >= 15 C no change, at OT 10-14 C targets +1 C higher but room is above target 91% of the time so suppression dominates. |

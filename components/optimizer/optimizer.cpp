@@ -454,8 +454,9 @@ namespace esphome
             float clamped_outside_temp = std::clamp(actual_outside_temp, COLD_WEATHER_TEMP, MILD_WEATHER_TEMP);
             float cold_factor = (MILD_WEATHER_TEMP - clamped_outside_temp) / (MILD_WEATHER_TEMP - COLD_WEATHER_TEMP);
 
-            // use quadratic scaling for gradual cold response
-            cold_factor *= cold_factor * 0.5f;
+            // linear scaling: prevents compressor cycling at moderate cold (OT 3-8C)
+            // by keeping flow targets in the efficient 33-35C range instead of the
+            // problematic 30-32C zone where the outdoor unit trips on overshoot
 
             ESP_LOGD(OPTIMIZER_TAG, "[*] Starting auto-adaptive cycle, z2 independent: %d, has_cooling: %d, cold factor: %.2f, min delta T: %.2f, max delta T: %.2f", 
                 status.has_independent_zone_temps(), status.has_cooling(), cold_factor, base_min_delta_t, max_delta_t);
