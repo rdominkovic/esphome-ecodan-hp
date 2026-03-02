@@ -286,7 +286,7 @@ namespace esphome
                     else
                     {
                         calculated_flow = actual_return_temp + target_delta_t;
-                        if (error < -0.5f) {
+                        if (error <= -0.5f) {
                             calculated_flow = zone_min_flow_temp;
                             suppress_heating = true;
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room %.1f°C above target. Suppressing heating (flow=%.1f°C).",
