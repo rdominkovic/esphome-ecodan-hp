@@ -330,19 +330,19 @@ Natural convection from bare copper pipe, using standard heat transfer coefficie
 
 ### Flow Temperature Control
 
-**Active mode: External Weather Compensation via HA Automation** (switched from Auto-Adaptive on Mar 3)
+**Active mode: Auto-Adaptive Control** (re-enabled Mar 3 evening after HA weather comp trial)
 
-The HA automation `weather_compensation_flow_setpoint` calculates the flow temperature setpoint every 5 minutes using a weather compensation curve plus room temperature P-correction. The ESP32 is in Heat Flow Temperature mode — it accepts and maintains whatever setpoint HA sends. Auto-Adaptive is OFF (when AA is ON it overrides external setpoints within minutes). See "Weather Compensation Automation" section below for full formula and tuning guide.
+Auto-Adaptive (AA) manages flow temperature setpoint dynamically using `flow = return + delta_T`, where delta_T adapts to outdoor temperature (cold_factor) and room temperature error. This keeps the setpoint close to current water temperature, enabling low Hz continuous operation. The HA weather compensation automation is disabled (it produced worse daytime COP: 3.0 vs AA's 3.5-5.3).
 
 | Parameter | Value | Notes |
 | --------- | ----- | ----- |
-| Operating mode | Heat Flow Temperature | ESP32 accepts external setpoint from HA |
-| Auto-Adaptive Control | **OFF** | Disabled Mar 3 — AA overrides external setpoints |
+| Operating mode | Heat Flow Temperature | AA manages setpoint via optimizer |
+| Auto-Adaptive Control | **ON** | Re-enabled Mar 3 evening |
 | Room temp target | 22.5 C | Desired indoor temperature |
 | Room temp source | 3 Tuya thermostats | Avg of dnevna soba, ured, kupatilo (Tuya values / 2) |
-| Setpoint range | 25–40 C | Hard limits enforced in automation |
-| Curve offset | 0.0 C | `input_number.ecodan_curve_offset` — adjust ±5 C via HA UI slider |
-| P-gain (room correction) | 4.0 | correction = clamp(4.0 × (target − room), −5, +8) C |
+| Max flow temperature | 40 C | AA upper limit |
+| Heating system type | UFH | Underfloor heating profile |
+| HA weather comp automation | **OFF** | Disabled — conflicts with AA |
 
 ### Weather Compensation Automation
 
@@ -395,7 +395,7 @@ new_sp  = round to nearest 0.5 C
 
 ### Firmware Modifications (local fork)
 
-**Note:** Auto-Adaptive is currently OFF (switched Mar 3 to external weather compensation). These firmware modifications are compiled into the firmware but are dormant while AA is disabled. If AA is re-enabled, these modifications become active again.
+**Status:** Auto-Adaptive is ON. All firmware modifications below are active.
 
 Using local components instead of GitHub source. Four key changes to the optimizer:
 
@@ -780,4 +780,5 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Mar 2 | ~08:00 | reduced_delta suppression boundary: < → <= | Attempt #3. Fixed exact boundary case where room=23.0 was not entering suppression (< vs <=). Result: only fixed the exact room=target+0.5 edge case. Room at 22.8 C (−0.3 error) still cycled at OT 7-9 C. Not the root cause. |
 | Mar 2 | ~18:30 | reduced_delta: proportional scaling | Attempt #4. Formula: `dynamic_min × (1 + error/0.5)`. At error=−0.3, OT=5 C: delta_T = 3.5 × 0.4 = 1.4 C → target 33.4 C. At OT=3 C: delta_T = 4.0 × 0.4 = 1.6 C → target 31.6 C. Result: Hz 48-54, still cycling. The problem is not the absolute target value — it's the Hz level. At Hz 26-30, even target 30-32 C works fine (no overshoot). At Hz 50+, even 35 C causes overshoot. |
 | Mar 2 | ~20:30 | reduced_delta: fixed 1.0 C | Attempt #5 (final AA tuning attempt). When room above target, always use delta_T=1.0 C regardless of cold_factor. At OT=5 C: target ~33 C. At OT=3 C: target ~31 C. Goal: keep Hz low at all outdoor temps. Deployed during active DHW cycle. |
-| Mar 3 | ~08:30 | **Switched to external weather compensation HA automation** | **Architecture change.** Root issue: AA optimizer uses `flow = return + delta_T`, so at OT=5 C return≈29 C + delta_T 3.5 C = 40 C setpoint → Hz=48 → COP 2.27. UFH curve should give 32 C at OT=5 C → Hz=26-30 → COP 3.8. The AA formula is fundamentally wrong for mild weather UFH. Fix: turned AA OFF, deployed HA automation `weather_compensation_flow_setpoint` with formula `base = clamp(42.0 − 0.68 × (OT+10), 25, 40)` plus P-correction for room temp (Kp=4.0) and rate limiting (max 1 C/update, min=feed−1.5 C). `input_number.ecodan_curve_offset` (±5 C) lets curve be shifted from HA UI without file edits. At OT=7 C: expected setpoint ~30.4 C vs previous 34-40 C. Firmware mods remain compiled but dormant while AA is off. See "Weather Compensation Automation" section for full formula. |
+| Mar 3 | ~08:30 | Switched to external weather compensation HA automation | Turned AA OFF, deployed HA automation `weather_compensation_flow_setpoint` with curve formula + P-correction + rate limiting. See "Weather Compensation Automation" section for full formula. |
+| Mar 3 | ~22:30 | **Re-enabled Auto-Adaptive, disabled HA weather comp** | **Reverted to AA after analyzing full day of HA weather comp data.** HA weather comp produced COP 3.0 overall vs AA's 3.5. Key comparison: AA daytime COP 4.0-5.3 (long continuous runs at Hz 24-40) vs HA WC daytime COP 3.1 (short cycling, Hz 39+). AA's only weakness is overnight cycling at OT < 5 C (Hz 45-50, COP 2.0), but with cheaper night electricity this is acceptable. HA weather comp also had bugs: post-DHW safety floor held SP at 40 C for 30+ min causing Hz 82, and no warm-weather cutoff caused 7 pointless midday cycles. Conclusion: AA's tracking approach (setpoint close to current water temp) is fundamentally better for low-Hz operation than a fixed weather curve. |

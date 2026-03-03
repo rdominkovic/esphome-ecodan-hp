@@ -231,10 +231,19 @@ namespace esphome
             float x = fmin(error_normalized, 1.0f);
             float error_factor = use_linear_error ? x : x * x * (3.0f - 2.0f * x);
             float smart_boost = is_heating_mode ? this->calculate_smart_boost(heating_type_index, error) : 1.0f;
-            
+
             // apply cold factor
             float dynamic_min_delta_t = base_min_delta_t + (cold_factor * (min_delta_cold_limit - base_min_delta_t));
             float target_delta_t = dynamic_min_delta_t + error_factor * smart_boost * (max_delta_t - dynamic_min_delta_t);
+
+            // publish diagnostic sensors
+            if (i == 0) {
+                if (this->state_.aa_error) this->state_.aa_error->publish_state(error);
+                if (this->state_.aa_error_factor) this->state_.aa_error_factor->publish_state(error_factor);
+                if (this->state_.aa_smart_boost) this->state_.aa_smart_boost->publish_state(smart_boost);
+                if (this->state_.aa_dynamic_min) this->state_.aa_dynamic_min->publish_state(dynamic_min_delta_t);
+                if (this->state_.aa_delta_t) this->state_.aa_delta_t->publish_state(target_delta_t);
+            }
 
             ESP_LOGD(OPTIMIZER_TAG, "Effective delta T: %.2f, cold factor: %.2f, dynamic min delta T: %.2f, error factor: %.2f, smart boost: %.2f, linear profile: %d", 
                 target_delta_t, cold_factor, dynamic_min_delta_t, error_factor, smart_boost, use_linear_error);
@@ -280,6 +289,10 @@ namespace esphome
 
                         calculated_flow = actual_return_temp + ramped_delta_t;
                         calculated_flow = this->round_nearest(calculated_flow);
+                        if (i == 0) {
+                            if (this->state_.aa_mode) this->state_.aa_mode->publish_state(4.0f);
+                            if (this->state_.aa_calculated_flow) this->state_.aa_calculated_flow->publish_state(calculated_flow);
+                        }
                         ESP_LOGW(OPTIMIZER_TAG, "Z%d Defrost Recovery: %.0f%% done. Ramp Delta: %.2f (Min: %.2f, Target: %.2f). Flow: %.2f",
                                  (i + 1), (recovery_ratio * 100.0f), ramped_delta_t, base_min_delta_t, target_delta_t, calculated_flow);
                     }
@@ -289,14 +302,19 @@ namespace esphome
                         if (error <= -0.5f) {
                             calculated_flow = zone_min_flow_temp;
                             suppress_heating = true;
+                            if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(3.0f);
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room %.1f°C above target. Suppressing heating (flow=%.1f°C).",
                                 (i+1), -error, zone_min_flow_temp);
                         } else if (error < 0.0f) {
                             calculated_flow = actual_return_temp + 1.0f;
+                            if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(2.0f);
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.2f). Fixed delta 1.0, flow=%.1f°C.",
                                 (i+1), error, calculated_flow);
+                        } else {
+                            if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(1.0f);
                         }
                         calculated_flow = this->round_nearest(calculated_flow);
+                        if (i == 0 && this->state_.aa_calculated_flow) this->state_.aa_calculated_flow->publish_state(calculated_flow);
 
                         // if there was a boost adjustment, check if it's still needed and clear if needed
                         auto optimizer_zone = (zone == esphome::ecodan::Zone::ZONE_2) ? OptimizerZone::ZONE_2 : OptimizerZone::ZONE_1;
@@ -364,11 +382,15 @@ namespace esphome
         void Optimizer::run_auto_adaptive_loop()
         {
             if (!this->state_.auto_adaptive_control_enabled->state)
+            {
+                if (this->state_.aa_mode) this->state_.aa_mode->publish_state(0.0f);
                 return;
+            }
             auto &status = this->state_.ecodan_instance->get_status();
 
             if (this->is_system_hands_off(status))
             {
+                if (this->state_.aa_mode) this->state_.aa_mode->publish_state(0.0f);
                 ESP_LOGD(OPTIMIZER_TAG, "System is busy (DHW, Defrost, or Lockout). Exiting.");
                 return;
             }
@@ -456,8 +478,9 @@ namespace esphome
             // linear scaling: prevents compressor cycling at moderate cold (OT 3-8C)
             // by keeping flow targets in the efficient 33-35C range instead of the
             // problematic 30-32C zone where the outdoor unit trips on overshoot
+            if (this->state_.aa_cold_factor) this->state_.aa_cold_factor->publish_state(cold_factor);
 
-            ESP_LOGD(OPTIMIZER_TAG, "[*] Starting auto-adaptive cycle, z2 independent: %d, has_cooling: %d, cold factor: %.2f, min delta T: %.2f, max delta T: %.2f", 
+            ESP_LOGD(OPTIMIZER_TAG, "[*] Starting auto-adaptive cycle, z2 independent: %d, has_cooling: %d, cold factor: %.2f, min delta T: %.2f, max delta T: %.2f",
                 status.has_independent_zone_temps(), status.has_cooling(), cold_factor, base_min_delta_t, max_delta_t);
 
             float calculated_flows_heat[2] = {0.0f, 0.0f};

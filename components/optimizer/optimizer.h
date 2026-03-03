@@ -54,6 +54,16 @@ namespace esphome
       esphome::sensor::Sensor *daily_heating_produced;
       esphome::sensor::Sensor *daily_heating_consumed;
 
+      // diagnostic sensors for optimizer internals
+      esphome::sensor::Sensor *aa_cold_factor;
+      esphome::sensor::Sensor *aa_delta_t;
+      esphome::sensor::Sensor *aa_dynamic_min;
+      esphome::sensor::Sensor *aa_error;
+      esphome::sensor::Sensor *aa_mode;
+      esphome::sensor::Sensor *aa_error_factor;
+      esphome::sensor::Sensor *aa_smart_boost;
+      esphome::sensor::Sensor *aa_calculated_flow;
+
       esphome::number::Number *solver_kwh_meter_feedback;
       esphome::select::Select *heating_system_type;
       esphome::select::Select *temperature_feedback_source_z1;

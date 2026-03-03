@@ -93,6 +93,16 @@ esphome:
             state.daily_heating_produced = id(daily_computed_output_power);
             state.daily_heating_consumed = id(delta_energy_consumed_increasing);
 
+            // diagnostic sensors
+            state.aa_cold_factor = id(aa_cold_factor);
+            state.aa_delta_t = id(aa_delta_t);
+            state.aa_dynamic_min = id(aa_dynamic_min);
+            state.aa_error = id(aa_error);
+            state.aa_mode = id(aa_mode);
+            state.aa_error_factor = id(aa_error_factor);
+            state.aa_smart_boost = id(aa_smart_boost);
+            state.aa_calculated_flow = id(aa_calculated_flow);
+
             // instantiate optimizer
             id(optimizer_ptr) = new esphome::optimizer::Optimizer(state);
             
@@ -328,6 +338,52 @@ switch:
     id: smart_boost_enabled
     restore_mode: RESTORE_DEFAULT_OFF
     optimistic: true
+
+sensor:
+  - platform: template
+    id: aa_cold_factor
+    name: ${aa_cold_factor}
+    accuracy_decimals: 2
+    icon: "mdi:snowflake-thermometer"
+  - platform: template
+    id: aa_delta_t
+    name: ${aa_delta_t}
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:delta"
+  - platform: template
+    id: aa_dynamic_min
+    name: ${aa_dynamic_min}
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:arrow-collapse-down"
+  - platform: template
+    id: aa_error
+    name: ${aa_error}
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:thermometer-alert"
+  - platform: template
+    id: aa_mode
+    name: ${aa_mode}
+    accuracy_decimals: 0
+    icon: "mdi:state-machine"
+  - platform: template
+    id: aa_error_factor
+    name: ${aa_error_factor}
+    accuracy_decimals: 2
+    icon: "mdi:percent"
+  - platform: template
+    id: aa_smart_boost
+    name: ${aa_smart_boost}
+    accuracy_decimals: 2
+    icon: "mdi:rocket-launch"
+  - platform: template
+    id: aa_calculated_flow
+    name: ${aa_calculated_flow}
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    icon: "mdi:thermometer-water"
 
 binary_sensor:
   - platform: template

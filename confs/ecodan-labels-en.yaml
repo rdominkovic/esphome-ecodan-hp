@@ -178,3 +178,13 @@ substitutions:
   solver_kwh_meter_feedback: kWh meter feedback
 
   asgard_vt_temp_sensor_source: Virtual Thermostat Source
+
+  # auto adaptive diagnostic sensors
+  aa_cold_factor: 'AA Cold Factor'
+  aa_delta_t: 'AA Target Delta T'
+  aa_dynamic_min: 'AA Dynamic Min Delta'
+  aa_error: 'AA Room Error'
+  aa_mode: 'AA Control Mode'
+  aa_error_factor: 'AA Error Factor'
+  aa_smart_boost: 'AA Smart Boost'
+  aa_calculated_flow: 'AA Calculated Flow'
