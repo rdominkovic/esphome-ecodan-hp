@@ -330,25 +330,72 @@ Natural convection from bare copper pipe, using standard heat transfer coefficie
 
 ### Flow Temperature Control
 
-**Active mode: Auto-Adaptive Delta-T Control** (switched from Weather Compensation on Feb 26)
+**Active mode: External Weather Compensation via HA Automation** (switched from Auto-Adaptive on Mar 3)
 
-The ESP32 optimizer dynamically calculates flow target = return_temp + delta_T, where delta_T depends on room temperature error and outdoor conditions. This replaces the static weather compensation curve. Using local fork with custom tuning (see Firmware Modifications below).
+The HA automation `weather_compensation_flow_setpoint` calculates the flow temperature setpoint every 5 minutes using a weather compensation curve plus room temperature P-correction. The ESP32 is in Heat Flow Temperature mode — it accepts and maintains whatever setpoint HA sends. Auto-Adaptive is OFF (when AA is ON it overrides external setpoints within minutes). See "Weather Compensation Automation" section below for full formula and tuning guide.
 
 | Parameter | Value | Notes |
 | --------- | ----- | ----- |
-| Operating mode | Heat Flow Temperature | Required for auto-adaptive |
-| Auto-Adaptive Control | ON | ESP32 optimizer manages flow setpoint |
-| Heating System Type | Underfloor Heating | UFH profile: delta-T range 1.0-6.5 C, smoothstep error scaling |
-| Room temp target | 22.5 C | Desired indoor temperature (lowered from 23 C on Feb 27) |
-| Room temp source | HA/REST API | HA automation pushes avg of 3 Tuya thermostats every 5 min |
-| Room temp feedback | ~22.8 C | Average of dnevna soba, ured, kupatilo (Tuya values / 2) |
-| Max heating flow | 40 C | Upper limit for optimizer |
-| Min heating flow | 25 C | Lower limit for optimizer |
-| Setpoint bias | 0 C | Neutral, can shift demand for tariffs/solar |
-| Smart Boost | OFF | Enable if room temp stagnates |
-| Defrost Mitigation | OFF | Enable if post-defrost issues occur |
+| Operating mode | Heat Flow Temperature | ESP32 accepts external setpoint from HA |
+| Auto-Adaptive Control | **OFF** | Disabled Mar 3 — AA overrides external setpoints |
+| Room temp target | 22.5 C | Desired indoor temperature |
+| Room temp source | 3 Tuya thermostats | Avg of dnevna soba, ured, kupatilo (Tuya values / 2) |
+| Setpoint range | 25–40 C | Hard limits enforced in automation |
+| Curve offset | 0.0 C | `input_number.ecodan_curve_offset` — adjust ±5 C via HA UI slider |
+| P-gain (room correction) | 4.0 | correction = clamp(4.0 × (target − room), −5, +8) C |
+
+### Weather Compensation Automation
+
+HA automation `weather_compensation_flow_setpoint` on the cloud VM, fires every 5 minutes. Pauses during DHW and defrost (3-way valve ON or defrost sensor ON).
+
+**Formula:**
+
+```
+base    = clamp(42.0 − 0.68 × (OT + 10), 25, 40)
+error   = room_target(22.5) − room_actual
+corr    = clamp(4.0 × error, −5, +8)
+raw     = base + curve_offset + corr
+
+# Rate limiting (prevents compressor halt on fast setpoint drop):
+safe_floor = max(feed_temp − 1.5, 25.0)
+new_sp  = clamp(max(raw, prev_setpoint − 1.0, safe_floor), 25, 40)
+new_sp  = round to nearest 0.5 C
+```
+
+**Curve examples (offset=0, error=0):**
+
+| OT    | Setpoint | Notes |
+|-------|----------|-------|
+| +15 C | 25.0 C   | Minimum clamp |
+| +10 C | 28.6 C   | |
+| +7 C  | 30.4 C   | |
+| +5 C  | 31.8 C   | Was 40 C with AA at OT=5 |
+| 0 C   | 35.2 C   | |
+| −5 C  | 38.6 C   | |
+| −10 C | 40.0 C   | Maximum clamp |
+
+**Tuning (no file editing):**
+
+| Parameter | Where | Default | Effect |
+|-----------|-------|---------|--------|
+| `curve_offset` | HA input_number slider | 0.0 C | Shifts entire curve ±5 C |
+| `room_target` | automation variable | 22.5 C | Indoor temperature target |
+| `Kp` | automation variable `room_correction` | 4.0 | Room correction gain |
+
+- House too cold → increase `curve_offset` by +0.5 C increments
+- House too warm → decrease `curve_offset`
+- Room temp oscillates → decrease Kp (try 3.0 or 2.5)
+- Room temp slow to recover → increase Kp (try 5.0)
+
+**Rollback:** turn AA back ON (`switch.ecodan_heatpump_auto_adaptive_control → ON`). The automation will continue running but AA will override its setpoints immediately, so no harm done. Alternatively disable the automation in HA.
+
+**Known limitation:** no explicit shutoff when room is above target at high OT. At OT=+15 C, setpoint clamps to 25 C (minimum) and the heat pump will run at minimum Hz or stop naturally when feed reaches setpoint. If this proves to be a problem, add a condition to skip updates when room > 23 C and OT > 10 C.
+
+---
 
 ### Firmware Modifications (local fork)
+
+**Note:** Auto-Adaptive is currently OFF (switched Mar 3 to external weather compensation). These firmware modifications are compiled into the firmware but are dormant while AA is disabled. If AA is re-enabled, these modifications become active again.
 
 Using local components instead of GitHub source. Four key changes to the optimizer:
 
@@ -431,14 +478,16 @@ Analysis of 2121 heating-only readings (compressor ON, no DHW, no defrost).
 
 Key insight: target 34-35 C has BETTER COP than 30-31 C despite higher feed temperature. The COP benefit of lower Hz (30-37 vs 40-56) and continuous operation outweighs the penalty of slightly higher flow temperature.
 
-**Previous Weather Compensation Curve (inactive, kept for reference):**
+**Original ESP32 Weather Compensation Curve (inactive, for reference):**
 
 | Outdoor temp | Flow water temp |
 | ------------ | --------------- |
 | -10 C        | 40 C            |
 | +15 C        | 29 C            |
 
-Linear interpolation, offset 0 C. Replaced because outdoor unit halts compressor at +2 C above static setpoint, causing 28 min ON / 4 min OFF cycling at 60+ Hz.
+Linear interpolation, offset 0 C. Replaced Feb 26 by Auto-Adaptive because static setpoints caused outdoor unit compressor halt at +2 C overshoot, producing 28 min ON / 4 min OFF cycling at 60+ Hz.
+
+After 5 weeks of AA tuning (see changelog and Firmware Modifications section), replaced Mar 3 by external HA automation weather compensation — see "Weather Compensation Automation" section above. Same concept but formula runs in HA (not ESP32 firmware), uses a gentler slope calibrated for our UFH system, and adds room temperature P-correction.
 
 ### DHW (Domestic Hot Water)
 
@@ -728,3 +777,7 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Feb 27 | ~19:00 | Room target 23 → 22.5 C | 23 C was too warm in mild weather (OT 10+ C) |
 | Feb 28 | ~09:15 | reduced_delta: base_min → dynamic_min | **Root cause fix for overnight cycling.** Feb 28 00:00-08:00: 9 cycles (37 min ON / 4 min OFF, Hz 40-50), vs stable 23:00-01:50 run at 26-30 Hz. Problem: when room (22.8) > target (22.5), reduced_delta used base_min_delta_t (1.0) ignoring cold_factor. At OT 3 C, delta_T = max(0, 1.0-0.3) = 0.7 → flow target 32.2 C → only 2.0 C headroom before outdoor unit +2 C protection → compressor shutdown after ~35 min. Fix: use dynamic_min_delta_t (1.9 at OT 3 C) → delta_T = 1.6 → flow target 33.1 C → 4.0 C headroom → continuous operation. At warm OT (12-13 C), dynamic_min ≈ 1.0-1.1, so behavior is unchanged. |
 | Mar 1 | ~09:15 | cold_factor: quadratic → linear | **Eliminated the 30-32 C dead zone.** Overnight Mar 1: 11 compressor starts (1.1/h), 30 min ON / 4 min OFF cycling at OT 3-5 C. Root cause: quadratic dampening (`cold_factor *= cold_factor * 0.5`) suppressed cold_factor too aggressively at moderate cold — OT 5 C gave cf=0.125, dynamic_min=1.6, target=30.6 C. At this target, compressor overshoots by 2 C within 30 min, triggering outdoor unit protection. After defrost when OT dropped to 1-2 C, target naturally rose to 33-35 C and compressor ran 160 min continuously at 30-36 Hz. COP analysis of 2121 readings confirmed: target 31-32 C has worst COP (2.44-2.68, Hz 40-43), while 34-35 C has best COP (3.24, Hz 37-42). Cycling periods show COP 2.07 vs continuous 2.88 (39% penalty). Fix: removed quadratic, cold_factor is now linear `(15 - OT) / 20`. At OT 5 C: cf=0.50, dynamic_min=3.5, target=32.5 C. At OT 3 C: cf=0.60, dynamic_min=4.0, target=33.0 C — directly into the optimal COP zone. Warm weather impact minimal: at OT >= 15 C no change, at OT 10-14 C targets +1 C higher but room is above target 91% of the time so suppression dominates. |
+| Mar 2 | ~08:00 | reduced_delta suppression boundary: < → <= | Attempt #3. Fixed exact boundary case where room=23.0 was not entering suppression (< vs <=). Result: only fixed the exact room=target+0.5 edge case. Room at 22.8 C (−0.3 error) still cycled at OT 7-9 C. Not the root cause. |
+| Mar 2 | ~18:30 | reduced_delta: proportional scaling | Attempt #4. Formula: `dynamic_min × (1 + error/0.5)`. At error=−0.3, OT=5 C: delta_T = 3.5 × 0.4 = 1.4 C → target 33.4 C. At OT=3 C: delta_T = 4.0 × 0.4 = 1.6 C → target 31.6 C. Result: Hz 48-54, still cycling. The problem is not the absolute target value — it's the Hz level. At Hz 26-30, even target 30-32 C works fine (no overshoot). At Hz 50+, even 35 C causes overshoot. |
+| Mar 2 | ~20:30 | reduced_delta: fixed 1.0 C | Attempt #5 (final AA tuning attempt). When room above target, always use delta_T=1.0 C regardless of cold_factor. At OT=5 C: target ~33 C. At OT=3 C: target ~31 C. Goal: keep Hz low at all outdoor temps. Deployed during active DHW cycle. |
+| Mar 3 | ~08:30 | **Switched to external weather compensation HA automation** | **Architecture change.** Root issue: AA optimizer uses `flow = return + delta_T`, so at OT=5 C return≈29 C + delta_T 3.5 C = 40 C setpoint → Hz=48 → COP 2.27. UFH curve should give 32 C at OT=5 C → Hz=26-30 → COP 3.8. The AA formula is fundamentally wrong for mild weather UFH. Fix: turned AA OFF, deployed HA automation `weather_compensation_flow_setpoint` with formula `base = clamp(42.0 − 0.68 × (OT+10), 25, 40)` plus P-correction for room temp (Kp=4.0) and rate limiting (max 1 C/update, min=feed−1.5 C). `input_number.ecodan_curve_offset` (±5 C) lets curve be shifted from HA UI without file edits. At OT=7 C: expected setpoint ~30.4 C vs previous 34-40 C. Firmware mods remain compiled but dormant while AA is off. See "Weather Compensation Automation" section for full formula. |
