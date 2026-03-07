@@ -118,6 +118,10 @@ namespace esphome
       uint32_t compressor_start_time_ = 0;
       uint32_t last_defrost_time_ = 0;
 
+      // suppression recovery ramp state
+      uint32_t suppression_end_time_ = 0;
+      bool was_suppressing_ = false;
+
       // save last callback state, to only invoke callback on actual change
       float last_hp_feed_temp_ = NAN;
       float last_z1_feed_temp_ = NAN;

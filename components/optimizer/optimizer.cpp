@@ -296,21 +296,60 @@ namespace esphome
                         ESP_LOGW(OPTIMIZER_TAG, "Z%d Defrost Recovery: %.0f%% done. Ramp Delta: %.2f (Min: %.2f, Target: %.2f). Flow: %.2f",
                                  (i + 1), (recovery_ratio * 100.0f), ramped_delta_t, base_min_delta_t, target_delta_t, calculated_flow);
                     }
+                    else if (this->was_suppressing_ && this->suppression_end_time_ > 0
+                             && (current_ms - this->suppression_end_time_) < 20 * 60 * 1000UL)
+                    {
+                        const uint32_t SUPPRESSION_RECOVERY_MS = 20 * 60 * 1000UL;
+                        uint32_t elapsed_ms = current_ms - this->suppression_end_time_;
+                        float recovery_ratio = (float)elapsed_ms / (float)SUPPRESSION_RECOVERY_MS;
+                        recovery_ratio = std::clamp(recovery_ratio, 0.0f, 1.0f);
+                        float delta_gap = fmax(target_delta_t - base_min_delta_t, 0.0f);
+                        float ramped_delta_t = base_min_delta_t + (delta_gap * recovery_ratio);
+
+                        calculated_flow = actual_return_temp + ramped_delta_t;
+                        calculated_flow = this->round_nearest(calculated_flow);
+                        if (i == 0) {
+                            if (this->state_.aa_mode) this->state_.aa_mode->publish_state(5.0f);
+                            if (this->state_.aa_calculated_flow)
+                                this->state_.aa_calculated_flow->publish_state(calculated_flow);
+                        }
+                        ESP_LOGW(OPTIMIZER_TAG,
+                            "Z%d Suppression Recovery: %.0f%% done. Ramp Delta: %.2f "
+                            "(Min: %.2f, Target: %.2f). Flow: %.2f",
+                            (i + 1), (recovery_ratio * 100.0f), ramped_delta_t,
+                            base_min_delta_t, target_delta_t, calculated_flow);
+                    }
                     else
                     {
+                        // clear expired recovery state
+                        if (this->was_suppressing_ && this->suppression_end_time_ > 0) {
+                            this->was_suppressing_ = false;
+                            this->suppression_end_time_ = 0;
+                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Suppression recovery complete.", (i + 1));
+                        }
+
                         calculated_flow = actual_return_temp + target_delta_t;
                         if (error <= -0.5f) {
                             calculated_flow = zone_min_flow_temp;
                             suppress_heating = true;
+                            this->was_suppressing_ = true;
                             if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(3.0f);
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room %.1f°C above target. Suppressing heating (flow=%.1f°C).",
                                 (i+1), -error, zone_min_flow_temp);
                         } else if (error < 0.0f) {
+                            if (this->was_suppressing_ && this->suppression_end_time_ == 0) {
+                                this->suppression_end_time_ = current_ms;
+                                ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression ended, starting recovery ramp.", (i + 1));
+                            }
                             calculated_flow = actual_return_temp + 1.0f;
                             if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(2.0f);
                             ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.2f). Fixed delta 1.0, flow=%.1f°C.",
                                 (i+1), error, calculated_flow);
                         } else {
+                            if (this->was_suppressing_ && this->suppression_end_time_ == 0) {
+                                this->suppression_end_time_ = current_ms;
+                                ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression ended, starting recovery ramp.", (i + 1));
+                            }
                             if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(1.0f);
                         }
                         calculated_flow = this->round_nearest(calculated_flow);
