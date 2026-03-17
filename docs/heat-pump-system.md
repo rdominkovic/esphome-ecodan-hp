@@ -528,6 +528,53 @@ Key sensors from the ecodan-hp integration:
 **Compressor**: compressor_frequency, compressor_starts, operating_hours
 **Flow**: flow_rate, pump_speed, pump_duty
 **System**: fan_speed, defrost_status, booster_heater, 3_way_valve
+**AA Diagnostics** (added Mar 3): aa_cold_factor, aa_target_delta_t, aa_dynamic_min_delta, aa_room_error, aa_control_mode, aa_error_factor, aa_smart_boost, aa_calculated_flow
+
+## Data Collection
+
+### CSV Logger (`/opt/ecodan/scripts/mqtt_logger.py`)
+
+MQTT subscriber on the VM that logs all sensor values every 60 seconds to `/opt/ecodan/data/ecodan_log.csv`. Runs as systemd service `ecodan-logger`. Also fetches room temperature from HA (Tuya thermostat average) every write cycle.
+
+Derived columns computed at write time:
+- `delta_t`: feed_temp − return_temp
+- `room_temp`: average of 3 Tuya thermostats (dnevna/ured/kupatilo), with /2 Tuya scaling correction
+- `cop_per_hz`: estimated_cop / compressor_hz × 10 (COP per 10 Hz, efficiency ratio)
+
+### Transition Log (`/opt/ecodan/data/ecodan_transitions.csv`)
+
+Real-time state change detection in the MQTT `on_message` handler. Writes immediately on edge detection — not buffered to the 60s write interval. Captures transitions that would be invisible at 1-minute CSV resolution.
+
+Tracked events:
+
+| Event | Trigger | Key context |
+|-------|---------|-------------|
+| `COMP_ON` | compressor 0→1 | off_duration, Hz, feed, target, OT, aa_mode, room |
+| `COMP_OFF` | compressor 1→0 | on_duration, Hz at stop, feed, target, OT, aa_mode |
+| `DHW_START` | 3way_valve 0→1 | dhw_temp, feed, comp_on |
+| `DHW_END` | 3way_valve 1→0 | dhw_temp, feed, duration |
+| `DEFROST_START` | defrost 0→1 | OT, feed |
+| `DEFROST_END` | defrost 1→0 | OT, feed, duration |
+| `AA_MODE` | aa_control_mode changes | old→new, room_error, calc_flow |
+| `SC_LOCKOUT_ON` | sc_lockout 0→1 | — |
+| `SC_LOCKOUT_OFF` | sc_lockout 1→0 | duration |
+
+Each row includes full context: timestamp, event, from/to state, duration of previous state (minutes), plus 14 context columns (OT, feed, return, target, delta_t, Hz, compressor, defrost, DHW valve, AA mode, room error, calculated flow, room temp, COP).
+
+Transitions also print to stdout (visible in `journalctl -u ecodan-logger -f`).
+
+### Analysis Scripts (`scripts/`)
+
+| Script | Purpose |
+|--------|---------|
+| `analyze_overnight.py` | Overnight cycle analysis with statistical summaries and timeline |
+| `analyze_last_overnight.py` | 8-section report: cycles, temps, Hz distribution, COP, energy, timeline, stability |
+| `analyze_today.py` | Quick daily summary with real-time progress |
+| `daily_report.py` | Comprehensive daily report: gaps, cycles, hourly breakdown, energy by mode |
+| `check_cycles.py` | Simple compressor cycle count diagnostic |
+| `investigate_cycles.py` | Detailed cycle analysis with duration and mode tracking |
+| `compare_pump_speed.py` | A/B comparison for pump speed changes |
+| `analyze_periods.py` | Period comparison for configuration A/B testing |
 
 ## Energy Data (Season 2024-2025)
 
@@ -781,4 +828,9 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Mar 2 | ~18:30 | reduced_delta: proportional scaling | Attempt #4. Formula: `dynamic_min × (1 + error/0.5)`. At error=−0.3, OT=5 C: delta_T = 3.5 × 0.4 = 1.4 C → target 33.4 C. At OT=3 C: delta_T = 4.0 × 0.4 = 1.6 C → target 31.6 C. Result: Hz 48-54, still cycling. The problem is not the absolute target value — it's the Hz level. At Hz 26-30, even target 30-32 C works fine (no overshoot). At Hz 50+, even 35 C causes overshoot. |
 | Mar 2 | ~20:30 | reduced_delta: fixed 1.0 C | Attempt #5 (final AA tuning attempt). When room above target, always use delta_T=1.0 C regardless of cold_factor. At OT=5 C: target ~33 C. At OT=3 C: target ~31 C. Goal: keep Hz low at all outdoor temps. Deployed during active DHW cycle. |
 | Mar 3 | ~08:30 | Switched to external weather compensation HA automation | Turned AA OFF, deployed HA automation `weather_compensation_flow_setpoint` with curve formula + P-correction + rate limiting. See "Weather Compensation Automation" section for full formula. |
+| Mar 3 | ~22:40 | Added 8 AA diagnostic sensors to firmware | Exposed optimizer internal values (aa_cold_factor, aa_target_delta_t, aa_dynamic_min_delta, aa_room_error, aa_control_mode, aa_error_factor, aa_smart_boost, aa_calculated_flow) as ESPHome sensors via MQTT. Added to CSV logger and labels. |
+| Mar 3 | ~23:00 | Added COP/Hz efficiency ratio to CSV logger | `cop_per_hz` = estimated_cop / compressor_hz × 10. Tracks efficiency per unit of compressor effort. |
+| Mar 4 | ~06:30 | Added transition logging to MQTT logger | Real-time state change detection for compressor, DHW, defrost, AA mode, SC lockout. Writes to separate `ecodan_transitions.csv` with full context. Added `PYTHONUNBUFFERED=1` to systemd service for live journalctl output. |
 | Mar 3 | ~22:30 | **Re-enabled Auto-Adaptive, disabled HA weather comp** | **Reverted to AA after analyzing full day of HA weather comp data.** HA weather comp produced COP 3.0 overall vs AA's 3.5. Key comparison: AA daytime COP 4.0-5.3 (long continuous runs at Hz 24-40) vs HA WC daytime COP 3.1 (short cycling, Hz 39+). AA's only weakness is overnight cycling at OT < 5 C (Hz 45-50, COP 2.0), but with cheaper night electricity this is acceptable. HA weather comp also had bugs: post-DHW safety floor held SP at 40 C for 30+ min causing Hz 82, and no warm-weather cutoff caused 7 pointless midday cycles. Conclusion: AA's tracking approach (setpoint close to current water temp) is fundamentally better for low-Hz operation than a fixed weather curve. |
+| Mar 7 | ~10:40 | Suppression recovery ramp (Mode 5) | Attempt #6. After suppression (Mode 3) ends, ramp delta_T from base_min to target over 20 min instead of jumping immediately. Prevents Hz 60-70 spikes on restart. Result: 19 activations in 10 days, moderate help (Hz 30-68 instead of 60-70), but 8/19 hit dead compressor (no benefit). Marginal overall impact. |
+| Mar 17 | ~22:50 | **Suppress cooldown hysteresis** | **Attempt #7. Root cause fix for Mode 3→5→3 cycling trap.** 11-day analysis (Mar 7-17) revealed COP 3.0 at OT 9-13 C, well below Mitsubishi spec ~4.5. Primary loss: cycling. Mar 12 vs Mar 13 at identical OT (13 C): 9 starts COP 3.73 vs 20 starts COP 2.71. Root cause: after Mode 5 recovery (20 min), system re-checks error — room still >= 23.0 C (UFH thermal mass prevents cooling in 35 min) → immediate re-suppress → SP drops to 25 C → outdoor unit shuts comp in 10 min → 15 min lockout → repeat. Fix: after Mode 5 completes, set `suppress_cooldown_active_` flag blocking re-entry into Mode 3 until room error > -0.2 (room cools to 22.7 C). System stays in Mode 2 (fixed delta 1.0) with continuous low-Hz operation instead of cycling. |
