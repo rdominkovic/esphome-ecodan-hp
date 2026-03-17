@@ -121,6 +121,7 @@ namespace esphome
       // suppression recovery ramp state
       uint32_t suppression_end_time_ = 0;
       bool was_suppressing_ = false;
+      bool suppress_cooldown_active_ = false;
 
       // save last callback state, to only invoke callback on actual change
       float last_hp_feed_temp_ = NAN;

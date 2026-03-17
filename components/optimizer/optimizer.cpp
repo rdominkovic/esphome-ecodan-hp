@@ -321,15 +321,22 @@ namespace esphome
                     }
                     else
                     {
-                        // clear expired recovery state
+                        // clear expired recovery state and activate cooldown
                         if (this->was_suppressing_ && this->suppression_end_time_ > 0) {
                             this->was_suppressing_ = false;
                             this->suppression_end_time_ = 0;
-                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Suppression recovery complete.", (i + 1));
+                            this->suppress_cooldown_active_ = true;
+                            ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression recovery complete. Cooldown active until error > -0.2.", (i + 1));
+                        }
+
+                        // clear suppress cooldown when room has cooled enough
+                        if (this->suppress_cooldown_active_ && error > -0.2f) {
+                            this->suppress_cooldown_active_ = false;
+                            ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppress cooldown cleared (error=%.2f).", (i+1), error);
                         }
 
                         calculated_flow = actual_return_temp + target_delta_t;
-                        if (error <= -0.5f) {
+                        if (error <= -0.5f && !this->suppress_cooldown_active_) {
                             calculated_flow = zone_min_flow_temp;
                             suppress_heating = true;
                             this->was_suppressing_ = true;
