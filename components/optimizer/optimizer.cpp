@@ -326,13 +326,20 @@ namespace esphome
                             this->was_suppressing_ = false;
                             this->suppression_end_time_ = 0;
                             this->suppress_cooldown_active_ = true;
-                            ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression recovery complete. Cooldown active until error > -0.2.", (i + 1));
+                            this->suppress_cooldown_start_ = current_ms;
+                            ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression recovery complete. Cooldown active (max 60 min).", (i + 1));
                         }
 
-                        // clear suppress cooldown when room has cooled enough
-                        if (this->suppress_cooldown_active_ && error > -0.2f) {
-                            this->suppress_cooldown_active_ = false;
-                            ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppress cooldown cleared (error=%.2f).", (i+1), error);
+                        // clear suppress cooldown when room has cooled enough or timeout
+                        const uint32_t SUPPRESS_COOLDOWN_MAX_MS = 60 * 60 * 1000UL;
+                        if (this->suppress_cooldown_active_) {
+                            bool cooled = error > -0.2f;
+                            bool timed_out = (current_ms - this->suppress_cooldown_start_) > SUPPRESS_COOLDOWN_MAX_MS;
+                            if (cooled || timed_out) {
+                                this->suppress_cooldown_active_ = false;
+                                ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppress cooldown cleared (%s, error=%.2f).",
+                                    (i+1), timed_out ? "timeout" : "cooled", error);
+                            }
                         }
 
                         calculated_flow = actual_return_temp + target_delta_t;
@@ -349,8 +356,14 @@ namespace esphome
                                 ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression ended, starting recovery ramp.", (i + 1));
                             }
                             calculated_flow = actual_return_temp + 1.0f;
+                            float mode2_cap = zone_min_flow_temp + dynamic_min_delta_t + 3.0f;
+                            if (calculated_flow > mode2_cap) {
+                                ESP_LOGD(OPTIMIZER_TAG, "Z%d Mode 2 cap: %.1f -> %.1f (return=%.1f).",
+                                    (i+1), calculated_flow, mode2_cap, actual_return_temp);
+                                calculated_flow = mode2_cap;
+                            }
                             if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(2.0f);
-                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.2f). Fixed delta 1.0, flow=%.1f°C.",
+                            ESP_LOGD(OPTIMIZER_TAG, "Z%d Room above target (Error %.2f). Flow=%.1f°C.",
                                 (i+1), error, calculated_flow);
                         } else {
                             if (this->was_suppressing_ && this->suppression_end_time_ == 0) {

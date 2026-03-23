@@ -122,6 +122,7 @@ namespace esphome
       uint32_t suppression_end_time_ = 0;
       bool was_suppressing_ = false;
       bool suppress_cooldown_active_ = false;
+      uint32_t suppress_cooldown_start_ = 0;
 
       // save last callback state, to only invoke callback on actual change
       float last_hp_feed_temp_ = NAN;
