@@ -8,12 +8,20 @@
         "delivered_kwh": 2556
     },
     "2026-02": {
-        "htg_consumed_kwh": 628,
-        "dhw_consumed_kwh": 99,
-        "consumed_kwh": 728,
-        "htg_delivered_kwh": 1431,
-        "dhw_delivered_kwh": 198,
-        "delivered_kwh": 1629,
-        "_note": "Feb 1-25 only (before daily CSV logging started Feb 26)"
+        "htg_consumed_kwh": 679,
+        "dhw_consumed_kwh": 115,
+        "consumed_kwh": 794,
+        "htg_delivered_kwh": 1568,
+        "dhw_delivered_kwh": 226,
+        "delivered_kwh": 1794
+    },
+    "2026-03": {
+        "htg_consumed_kwh": 308,
+        "dhw_consumed_kwh": 92,
+        "consumed_kwh": 400,
+        "htg_delivered_kwh": 1042,
+        "dhw_delivered_kwh": 185,
+        "delivered_kwh": 1228,
+        "_note": "Mar 1-25 only (Mar 26 in progress)"
     }
 }
