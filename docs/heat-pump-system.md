@@ -541,6 +541,30 @@ Derived columns computed at write time:
 - `room_temp`: average of 3 Tuya thermostats (dnevna/ured/kupatilo), with /2 Tuya scaling correction
 - `cop_per_hz`: estimated_cop / compressor_hz × 10 (COP per 10 Hz, efficiency ratio)
 
+#### Tariff-period COP tracking
+
+Tracks energy consumption per Croatian electricity tariff period (VT=day, NT=night). Uses delta accumulation from CN105 `daily_consumed`/`daily_produced` counters every 60s, split at tariff boundaries. Winter: NT 21:00-07:00, Summer: NT 22:00-08:00 (auto-detects DST). Handles midnight counter reset (consumed at 23:59, produced at 00:00). State persisted to `period_cop_state.json` for service restart recovery. Publishes to HA via MQTT with last 10 completed periods as history.
+
+#### HA sensors published via MQTT
+
+| HA Entity | MQTT Topic | Description |
+|-----------|-----------|-------------|
+| `sensor.ecodan_logger_ecodan_daily_cop` | `ecodan-logger/daily_cop/state` | Live daily COP from daily counters |
+| `sensor.ecodan_logger_ecodan_period_cop` | `ecodan-logger/period_cop/*` | Current + historical tariff period COP (attributes: current_period, history[]) |
+| `sensor.ecodan_logger_ecodan_yesterday` | `ecodan-logger/yesterday/*` | Yesterday's consumed/produced/COP |
+| `sensor.ecodan_logger_ecodan_log_totals` | `ecodan-logger/log_totals/*` | Totals across all CSV log files (consumed, produced, COP, date range, days) |
+| `sensor.ecodan_logger_ecodan_monthly_energy` | `ecodan-logger/monthly_energy/*` | Monthly energy breakdown with heating/DHW split from `historical_energy.json` + CSV logs |
+
+All sensors use MQTT auto-discovery (`homeassistant/sensor/*/config`) under the "Ecodan Logger" device.
+
+#### HA Dashboard (`lovelace.dashboard_ecodan`)
+
+The Ecodan dashboard displays:
+- **Daily summary**: today and yesterday consumed/delivered/COP
+- **Tariff COP table**: completed VT/NT periods with energy and COP per period
+- **Monthly energy table**: per-month breakdown with heating delivered, heating COP, DHW (PTV) delivered, DHW COP, and total COP. Data from `historical_energy.json` (manual FTC readings) combined with current month from CSV daily counters. Year total row at bottom.
+- **History graphs**: COP, Hz, compressor state, temperatures, DHW, setpoint
+
 ### Transition Log (`/opt/ecodan/data/ecodan_transitions.csv`)
 
 Real-time state change detection in the MQTT `on_message` handler. Writes immediately on edge detection — not buffered to the 60s write interval. Captures transitions that would be invisible at 1-minute CSV resolution.
@@ -576,9 +600,24 @@ Transitions also print to stdout (visible in `journalctl -u ecodan-logger -f`).
 | `compare_pump_speed.py` | A/B comparison for pump speed changes |
 | `analyze_periods.py` | Period comparison for configuration A/B testing |
 
-## Energy Data (Season 2024-2025)
+## Energy Data
 
-### Cumulative Totals (as of February 18, 2025)
+### Season 2025-2026 (Jan 1 - Mar 25, from FTC panel readings)
+
+| Month     | Htg Con (kWh) | Htg Del (kWh) | Htg COP | DHW Con (kWh) | DHW Del (kWh) | DHW COP | Total Con | Total Del | COP  |
+|-----------|---------------|---------------|---------|---------------|---------------|---------|-----------|-----------|------|
+| Jan 2026  | 1,106         | 2,240         | 2.03    | 175           | 315           | 1.80    | 1,282     | 2,556     | 1.99 |
+| Feb 2026  | 679           | 1,568         | 2.31    | 115           | 226           | 1.97    | 794       | 1,794     | 2.26 |
+| Mar 1-25  | 308           | 1,042         | 3.38    | 92            | 185           | 2.01    | 400       | 1,228     | 3.07 |
+| **Total** | **2,093**     | **4,850**     | **2.32**| **382**       | **726**       | **1.90**| **2,476** | **5,578** |**2.25**|
+
+Data sources:
+- Jan and Feb 1-25: manual FTC panel readings stored in `data/historical_energy.json`
+- Feb 26 onwards: CSV daily counters (`daily_consumed_kwh`/`daily_produced_kwh`) from MQTT logger
+- Heating/DHW split for Feb 26+ from FTC panel readings at month boundaries
+- Note: CN105 `daily_produced` counter undercounts delivered by ~5% vs FTC panel
+
+### Season 2024-2025 (as of February 18, 2025)
 
 | Category  | Consumed (kWh) | Delivered (kWh) | COP      |
 | --------- | -------------- | --------------- | -------- |
@@ -833,4 +872,6 @@ All 11 circuit flow meters (topometers) are set to the same value regardless of 
 | Mar 4 | ~06:30 | Added transition logging to MQTT logger | Real-time state change detection for compressor, DHW, defrost, AA mode, SC lockout. Writes to separate `ecodan_transitions.csv` with full context. Added `PYTHONUNBUFFERED=1` to systemd service for live journalctl output. |
 | Mar 3 | ~22:30 | **Re-enabled Auto-Adaptive, disabled HA weather comp** | **Reverted to AA after analyzing full day of HA weather comp data.** HA weather comp produced COP 3.0 overall vs AA's 3.5. Key comparison: AA daytime COP 4.0-5.3 (long continuous runs at Hz 24-40) vs HA WC daytime COP 3.1 (short cycling, Hz 39+). AA's only weakness is overnight cycling at OT < 5 C (Hz 45-50, COP 2.0), but with cheaper night electricity this is acceptable. HA weather comp also had bugs: post-DHW safety floor held SP at 40 C for 30+ min causing Hz 82, and no warm-weather cutoff caused 7 pointless midday cycles. Conclusion: AA's tracking approach (setpoint close to current water temp) is fundamentally better for low-Hz operation than a fixed weather curve. |
 | Mar 7 | ~10:40 | Suppression recovery ramp (Mode 5) | Attempt #6. After suppression (Mode 3) ends, ramp delta_T from base_min to target over 20 min instead of jumping immediately. Prevents Hz 60-70 spikes on restart. Result: 19 activations in 10 days, moderate help (Hz 30-68 instead of 60-70), but 8/19 hit dead compressor (no benefit). Marginal overall impact. |
+| Mar 21 | ~22:00 | **DHW target 45 → 42 C** | **COP optimization.** Analysis of Mar 17-21 data showed DHW COP 1.71 as single biggest daily COP drag. Mitsubishi rates SUZ-SWM80VA2 at W50/OT9: COP 2.77-3.29, but our actual DHW COP was 1.71. Three improvements from lower target: (1) lower feed temp needed (~49 C vs ~52 C) means better compressor COP per Mitsubishi performance table (W50 COP 2.77 vs W55 COP 2.54 at OT7); (2) reduced premature shutdown — FTC stops DHW when feed exceeds SP+2 C, lower SP means lower absolute feed cutoff; (3) fewer DHW cycles since tank cools slower from lower starting temp. DHW hysteresis (temp drop) stays at 5 C (read-only via CN105, changeable only on FTC panel), so tank now swings 37-42 C instead of 40-45 C. 42 C at tap is comfortable for all household use. Changed via HA API call to climate.ecodan_heatpump_dhw_climate entity. |
+| Mar 26 | ~09:00 | Added tariff-period COP and monthly energy to HA | MQTT logger publishes 6 new HA sensors: daily COP, period COP (VT/NT tracking), yesterday summary, log totals, and monthly energy breakdown. Monthly sensor combines manual FTC readings from `historical_energy.json` with current month from CSV logs. Ecodan HA dashboard redesigned with daily summary, tariff COP table, and monthly energy table (heating/PTV split with per-month COP). All values formatted to 2 decimal places. |
 | Mar 17 | ~22:50 | **Suppress cooldown hysteresis** | **Attempt #7. Root cause fix for Mode 3→5→3 cycling trap.** 11-day analysis (Mar 7-17) revealed COP 3.0 at OT 9-13 C, well below Mitsubishi spec ~4.5. Primary loss: cycling. Mar 12 vs Mar 13 at identical OT (13 C): 9 starts COP 3.73 vs 20 starts COP 2.71. Root cause: after Mode 5 recovery (20 min), system re-checks error — room still >= 23.0 C (UFH thermal mass prevents cooling in 35 min) → immediate re-suppress → SP drops to 25 C → outdoor unit shuts comp in 10 min → 15 min lockout → repeat. Fix: after Mode 5 completes, set `suppress_cooldown_active_` flag blocking re-entry into Mode 3 until room error > -0.2 (room cools to 22.7 C). System stays in Mode 2 (fixed delta 1.0) with continuous low-Hz operation instead of cycling. |
