@@ -370,7 +370,25 @@ namespace esphome
                                 this->suppression_end_time_ = current_ms;
                                 ESP_LOGI(OPTIMIZER_TAG, "Z%d Suppression ended, starting recovery ramp.", (i + 1));
                             }
-                            if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(1.0f);
+
+                            // Startup ramp: gradually increase delta_t after compressor restart
+                            const uint32_t STARTUP_RAMP_MS = 15 * 60 * 1000UL;
+                            uint32_t comp_start = this->compressor_start_time_;
+                            if (comp_start > 0 && (current_ms - comp_start) < STARTUP_RAMP_MS) {
+                                float ramp_ratio = (float)(current_ms - comp_start) / (float)STARTUP_RAMP_MS;
+                                ramp_ratio = std::clamp(ramp_ratio, 0.0f, 1.0f);
+                                float delta_gap = fmax(target_delta_t - base_min_delta_t, 0.0f);
+                                float ramped_delta_t = base_min_delta_t + (delta_gap * ramp_ratio);
+                                calculated_flow = actual_return_temp + ramped_delta_t;
+                                if (i == 0) {
+                                    if (this->state_.aa_mode) this->state_.aa_mode->publish_state(6.0f);
+                                    if (this->state_.aa_calculated_flow) this->state_.aa_calculated_flow->publish_state(this->round_nearest(calculated_flow));
+                                }
+                                ESP_LOGD(OPTIMIZER_TAG, "Z%d Startup Ramp: %.0f%% done. Delta: %.2f (base: %.2f, target: %.2f). Flow: %.2f",
+                                    (i + 1), (ramp_ratio * 100.0f), ramped_delta_t, base_min_delta_t, target_delta_t, calculated_flow);
+                            } else {
+                                if (i == 0 && this->state_.aa_mode) this->state_.aa_mode->publish_state(1.0f);
+                            }
                         }
                         calculated_flow = this->round_nearest(calculated_flow);
                         if (i == 0 && this->state_.aa_calculated_flow) this->state_.aa_calculated_flow->publish_state(calculated_flow);
