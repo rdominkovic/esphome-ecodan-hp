@@ -1,5 +1,5 @@
 # ABOUTME: Generates overnight heating performance report from CSV log data.
-# ABOUTME: Analyzes compressor cycles, Hz profiles, COP, and AA mode breakdown.
+# ABOUTME: Analyzes compressor cycles, Hz profiles, true COP, heat loss, and AA mode breakdown.
 
 import csv
 import sys
@@ -28,9 +28,6 @@ def parse_int(val, default=0):
 def load_period(csv_path, start_dt, end_dt):
     """Load CSV rows within the given time window."""
     rows = []
-    start_str = start_dt.strftime("%Y-%m-%d %H:")
-    end_str = end_dt.strftime("%Y-%m-%d %H:")
-    # Pre-filter by date strings to avoid parsing every row
     date_prefixes = set()
     d = start_dt.date()
     end_d = end_dt.date()
@@ -73,21 +70,23 @@ def analyze_night(rows):
         ret = parse_float(row[COL["return_temp"]])
         target = parse_float(row[COL["flow_target_temp"]])
         ot = parse_float(row[COL["outside_temp"]])
-        cop = parse_float(row[COL["estimated_cop"]])
-        power_in = parse_float(row[COL["estimated_power_kw"]])
         aa_mode = parse_float(row[COL["aa_control_mode"]])
         room = parse_float(row[COL["room_temp"]])
+        consumed = parse_float(row[COL["daily_consumed_kwh"]])
+        produced = parse_float(row[COL["daily_produced_kwh"]])
         ts_str = row[0]
 
         if prev_comp is not None and comp_on == 1 and prev_comp == 0:
-            # Compressor start — new cycle
             current_cycle = {
                 "start": ts_str, "end": None,
-                "hz_values": [], "cop_values": [], "power_values": [],
-                "feed_values": [], "target_values": [],
+                "hz_values": [], "feed_values": [], "target_values": [],
                 "mode_minutes": defaultdict(int),
                 "ot_values": [], "room_start": room, "room_end": room,
                 "is_dhw": False, "samples": 0,
+                "energy_start_consumed": consumed,
+                "energy_start_produced": produced,
+                "energy_end_consumed": consumed,
+                "energy_end_produced": produced,
             }
             cycles.append(current_cycle)
 
@@ -95,12 +94,10 @@ def analyze_night(rows):
             current_cycle["samples"] += 1
             current_cycle["end"] = ts_str
             current_cycle["room_end"] = room
+            current_cycle["energy_end_consumed"] = consumed
+            current_cycle["energy_end_produced"] = produced
             if hz > 0:
                 current_cycle["hz_values"].append(hz)
-            if cop > 0 and power_in > 0:
-                current_cycle["cop_values"].append(cop)
-            if power_in > 0:
-                current_cycle["power_values"].append(power_in)
             current_cycle["feed_values"].append(feed)
             current_cycle["target_values"].append(target)
             current_cycle["ot_values"].append(ot)
@@ -112,6 +109,8 @@ def analyze_night(rows):
         if prev_comp is not None and comp_on == 0 and prev_comp == 1:
             if current_cycle is not None:
                 current_cycle["end"] = ts_str
+                current_cycle["energy_end_consumed"] = consumed
+                current_cycle["energy_end_produced"] = produced
             current_cycle = None
 
         prev_comp = comp_on
@@ -128,31 +127,103 @@ def cycle_duration_min(cycle):
         return 0
 
 
-def print_report(date_str, cycles):
+def cycle_cop(cycle):
+    """True COP from FTC energy counter deltas. Returns 0 if data spans midnight reset."""
+    dc = cycle["energy_end_consumed"] - cycle["energy_start_consumed"]
+    dp = cycle["energy_end_produced"] - cycle["energy_start_produced"]
+    if dc < 0 or dp < 0:
+        return 0.0  # midnight counter reset — skip
+    if dc > 0.01:
+        return dp / dc
+    return 0.0
+
+
+def analyze_heat_loss(rows, heating_cycles):
+    """Estimate heat loss from total energy balance.
+
+    Uses energy balance: almost all delivered heat compensates for heat loss
+    since room temp barely changes overnight. This is more reliable than
+    measuring room drop during 4-min OFF periods (UFH thermal mass too large).
+    """
+    if not rows or not heating_cycles:
+        return None
+
+    # Total hours in the period
+    try:
+        t_start = datetime.strptime(rows[0][0], "%Y-%m-%d %H:%M:%S")
+        t_end = datetime.strptime(rows[-1][0], "%Y-%m-%d %H:%M:%S")
+        total_hours = (t_end - t_start).total_seconds() / 3600
+    except (ValueError, IndexError):
+        return None
+    if total_hours < 1:
+        return None
+
+    # Total energy delivered (only valid cycles, skip midnight-reset ones)
+    total_produced = 0
+    for c in heating_cycles:
+        dp = c["energy_end_produced"] - c["energy_start_produced"]
+        if dp > 0:
+            total_produced += dp
+
+    # Average temperatures
+    all_ot = [parse_float(r[COL["outside_temp"]]) for r in rows]
+    all_room = [parse_float(r[COL["room_temp"]]) for r in rows if parse_float(r[COL["room_temp"]]) > 0]
+    avg_ot = sum(all_ot) / len(all_ot) if all_ot else 0
+    avg_room = sum(all_room) / len(all_room) if all_room else 0
+    temp_diff = avg_room - avg_ot
+
+    avg_demand_kw = total_produced / total_hours if total_hours > 0 else 0
+    loss_per_degree = avg_demand_kw / temp_diff if temp_diff > 1 else 0
+
+    return {
+        "total_hours": total_hours,
+        "total_produced_kwh": total_produced,
+        "avg_demand_kw": avg_demand_kw,
+        "avg_ot": avg_ot,
+        "avg_room": avg_room,
+        "temp_diff": temp_diff,
+        "loss_per_degree_kw": loss_per_degree,
+    }
+
+
+def print_report(date_str, cycles, rows):
     heating_cycles = [c for c in cycles if not c["is_dhw"]]
     dhw_cycles = [c for c in cycles if c["is_dhw"]]
 
-    print(f"{'=' * 100}")
+    print(f"{'=' * 105}")
     print(f"  OVERNIGHT REPORT: {date_str}  (22:00 - 08:00)")
-    print(f"{'=' * 100}")
+    print(f"{'=' * 105}")
 
     # Summary
     durations = [cycle_duration_min(c) for c in heating_cycles if cycle_duration_min(c) > 0]
     all_hz = [h for c in heating_cycles for h in c["hz_values"]]
-    all_cop = [v for c in heating_cycles for v in c["cop_values"]]
     all_ot = [v for c in heating_cycles for v in c["ot_values"]]
+    cops = [cycle_cop(c) for c in heating_cycles if cycle_cop(c) > 0]
     mode_totals = defaultdict(int)
     for c in heating_cycles:
         for mode, mins in c["mode_minutes"].items():
             mode_totals[mode] += mins
+
+    # Overall COP from total energy delta
+    if heating_cycles:
+        total_consumed = sum(c["energy_end_consumed"] - c["energy_start_consumed"] for c in heating_cycles)
+        total_produced = sum(c["energy_end_produced"] - c["energy_start_produced"] for c in heating_cycles)
+        overall_cop = total_produced / total_consumed if total_consumed > 0.01 else 0
+    else:
+        total_consumed, total_produced, overall_cop = 0, 0, 0
 
     print(f"\n  Heating cycles: {len(heating_cycles)}    DHW cycles: {len(dhw_cycles)}")
     if durations:
         print(f"  Run duration:   min {min(durations):.0f} min, max {max(durations):.0f} min, avg {sum(durations)/len(durations):.0f} min, total {sum(durations):.0f} min")
     if all_hz:
         print(f"  Compressor Hz:  min {min(all_hz):.0f}, max {max(all_hz):.0f}, avg {sum(all_hz)/len(all_hz):.0f}")
-    if all_cop:
-        print(f"  Estimated COP:  min {min(all_cop):.1f}, max {max(all_cop):.1f}, avg {sum(all_cop)/len(all_cop):.1f}")
+    if total_consumed > 0:
+        print(f"  Energy:         consumed {total_consumed:.2f} kWh, produced {total_produced:.2f} kWh")
+        print(f"  TRUE COP:       {overall_cop:.2f} overall", end="")
+        if cops:
+            print(f"  (per-cycle: min {min(cops):.2f}, max {max(cops):.2f}, avg {sum(cops)/len(cops):.2f})")
+        else:
+            print()
     if all_ot:
         print(f"  Outside temp:   min {min(all_ot):.0f}, max {max(all_ot):.0f}, avg {sum(all_ot)/len(all_ot):.0f} C")
 
@@ -169,33 +240,124 @@ def print_report(date_str, cycles):
             print(f"    {name:<30s} {mins:>4d} min  ({pct:>4.0f}%)")
 
     # Per-cycle detail
-    print(f"\n  {'─' * 96}")
-    print(f"  {'#':>2}  {'Start':<20} {'Dur':>5} {'AvgHz':>5} {'MaxHz':>5} {'AvgCOP':>6} {'Feed':>5} {'SP':>5} {'OT':>4} {'Room':>5}  Modes")
-    print(f"  {'─' * 96}")
+    print(f"\n  {'─' * 101}")
+    print(f"  {'#':>2}  {'Start':<20} {'Dur':>5} {'AvgHz':>5} {'MaxHz':>5} {'COP':>5} {'kWh▼':>5} {'kWh▲':>5} {'Feed':>5} {'SP':>5} {'OT':>4} {'Room':>5}  Modes")
+    print(f"  {'─' * 101}")
 
     for i, c in enumerate(heating_cycles):
         dur = cycle_duration_min(c)
         avg_hz = sum(c["hz_values"]) / len(c["hz_values"]) if c["hz_values"] else 0
         max_hz = max(c["hz_values"]) if c["hz_values"] else 0
-        avg_cop = sum(c["cop_values"]) / len(c["cop_values"]) if c["cop_values"] else 0
+        cop = cycle_cop(c)
+        dc = c["energy_end_consumed"] - c["energy_start_consumed"]
+        dp = c["energy_end_produced"] - c["energy_start_produced"]
         avg_feed = sum(c["feed_values"]) / len(c["feed_values"]) if c["feed_values"] else 0
         avg_target = sum(c["target_values"]) / len(c["target_values"]) if c["target_values"] else 0
         avg_ot = sum(c["ot_values"]) / len(c["ot_values"]) if c["ot_values"] else 0
         modes_str = " ".join(f"M{m}:{n}m" for m, n in sorted(c["mode_minutes"].items()))
-        print(f"  {i+1:>2}  {c['start']:<20} {dur:>4.0f}m {avg_hz:>5.0f} {max_hz:>5.0f} {avg_cop:>6.1f} {avg_feed:>5.1f} {avg_target:>5.1f} {avg_ot:>4.0f} {c['room_end']:>5.1f}  {modes_str}")
+        print(f"  {i+1:>2}  {c['start']:<20} {dur:>4.0f}m {avg_hz:>5.0f} {max_hz:>5.0f} {cop:>5.2f} {dc:>5.2f} {dp:>5.2f} {avg_feed:>5.1f} {avg_target:>5.1f} {avg_ot:>4.0f} {c['room_end']:>5.1f}  {modes_str}")
 
     if dhw_cycles:
         print(f"\n  DHW Cycles:")
         for i, c in enumerate(dhw_cycles):
             dur = cycle_duration_min(c)
             avg_hz = sum(c["hz_values"]) / len(c["hz_values"]) if c["hz_values"] else 0
-            print(f"    {c['start']} - {dur:.0f} min, avg Hz {avg_hz:.0f}")
+            cop = cycle_cop(c)
+            print(f"    {c['start']} - {dur:.0f} min, avg Hz {avg_hz:.0f}, COP {cop:.2f}")
 
-    print(f"\n{'=' * 100}")
+    # Heat loss analysis
+    hl = analyze_heat_loss(rows, heating_cycles)
+    if hl and hl["total_produced_kwh"] > 0:
+        print(f"\n  {'─' * 101}")
+        print(f"  HEAT LOSS ESTIMATE (energy balance method)")
+        print(f"  {'─' * 101}")
+        print(f"  Period: {hl['total_hours']:.1f} hours, total heat delivered: {hl['total_produced_kwh']:.2f} kWh")
+        print(f"  Avg room: {hl['avg_room']:.1f} C, avg outside: {hl['avg_ot']:.0f} C, diff: {hl['temp_diff']:.0f} C")
+        print(f"  Avg heat demand: {hl['avg_demand_kw']:.2f} kW")
+        print(f"  Loss coefficient: {hl['loss_per_degree_kw']:.3f} kW per C of room-outside diff")
+        print(f"\n  Heat demand at different outdoor temps (room {hl['avg_room']:.0f} C):")
+        for sample_ot in [-5, 0, 3, 5, 7, 10, 15]:
+            diff = hl["avg_room"] - sample_ot
+            demand = hl["loss_per_degree_kw"] * diff
+            print(f"    OT {sample_ot:>3d} C → {demand:.1f} kW")
+
+    # OT-COP breakdown
+    if heating_cycles:
+        print(f"\n  {'─' * 101}")
+        print(f"  COP BY OUTSIDE TEMPERATURE")
+        print(f"  {'─' * 101}")
+        ot_buckets = defaultdict(lambda: {"consumed": 0, "produced": 0, "hz": [], "cycles": 0, "durations": []})
+        for c in heating_cycles:
+            avg_ot = sum(c["ot_values"]) / len(c["ot_values"]) if c["ot_values"] else 0
+            bucket = int(avg_ot // 2) * 2  # 2-degree buckets
+            dc = c["energy_end_consumed"] - c["energy_start_consumed"]
+            dp = c["energy_end_produced"] - c["energy_start_produced"]
+            if dc < 0 or dp < 0:
+                continue  # skip midnight counter reset cycle
+            ot_buckets[bucket]["consumed"] += dc
+            ot_buckets[bucket]["produced"] += dp
+            ot_buckets[bucket]["hz"].extend(c["hz_values"])
+            ot_buckets[bucket]["cycles"] += 1
+            ot_buckets[bucket]["durations"].append(cycle_duration_min(c))
+
+        print(f"  {'OT range':<12} {'Cycles':>6} {'AvgRun':>6} {'AvgHz':>5} {'Consumed':>8} {'Produced':>8} {'COP':>6}")
+        print(f"  {'─' * 60}")
+        for bucket in sorted(ot_buckets.keys()):
+            b = ot_buckets[bucket]
+            cop = b["produced"] / b["consumed"] if b["consumed"] > 0.01 else 0
+            avg_hz = sum(b["hz"]) / len(b["hz"]) if b["hz"] else 0
+            avg_dur = sum(b["durations"]) / len(b["durations"]) if b["durations"] else 0
+            print(f"  {bucket:>3d}-{bucket+2:<3d} C    {b['cycles']:>5}  {avg_dur:>5.0f}m {avg_hz:>5.0f} {b['consumed']:>7.2f}  {b['produced']:>7.2f}  {cop:>5.2f}")
+
+    print(f"\n{'=' * 105}")
+
+
+def get_summary_stats(cycles):
+    """Return key stats for comparison."""
+    heating = [c for c in cycles if not c["is_dhw"]]
+    durations = [cycle_duration_min(c) for c in heating if cycle_duration_min(c) > 0]
+    all_hz = [h for c in heating for h in c["hz_values"]]
+    total_consumed = sum(c["energy_end_consumed"] - c["energy_start_consumed"] for c in heating)
+    total_produced = sum(c["energy_end_produced"] - c["energy_start_produced"] for c in heating)
+    overall_cop = total_produced / total_consumed if total_consumed > 0.01 else None
+    return {
+        "n_cycles": len(heating),
+        "avg_duration": sum(durations) / len(durations) if durations else None,
+        "avg_hz": sum(all_hz) / len(all_hz) if all_hz else None,
+        "max_hz": max(all_hz) if all_hz else None,
+        "cop": overall_cop,
+    }
+
+
+def print_comparison(prev_cycles, curr_cycles, prev_date_str):
+    prev = get_summary_stats(prev_cycles)
+    curr = get_summary_stats(curr_cycles)
+
+    print(f"\n  COMPARISON vs previous night ({prev_date_str})")
+    print(f"  {'─' * 60}")
+    print(f"  {'Metric':<25} {'Previous':>12} {'Current':>12} {'Change':>12}")
+    print(f"  {'─' * 60}")
+
+    def fmt_cmp(label, prev_val, curr_val, fmt_str=".0f", lower_is_better=False):
+        if prev_val is None or curr_val is None:
+            return
+        diff = curr_val - prev_val
+        arrow = "▼" if diff < 0 else "▲" if diff > 0 else "="
+        good = (diff < 0) if lower_is_better else (diff > 0)
+        marker = " ✓" if good and abs(diff) > 0.1 else ""
+        print(f"  {label:<25} {prev_val:>12{fmt_str}} {curr_val:>12{fmt_str}} {arrow}{abs(diff):>10{fmt_str}}{marker}")
+
+    fmt_cmp("Heating cycles", prev["n_cycles"], curr["n_cycles"], "d", lower_is_better=True)
+    fmt_cmp("Avg run (min)", prev["avg_duration"], curr["avg_duration"], ".0f")
+    fmt_cmp("Avg Hz", prev["avg_hz"], curr["avg_hz"], ".0f", lower_is_better=True)
+    fmt_cmp("Max Hz", prev["max_hz"], curr["max_hz"], ".0f", lower_is_better=True)
+    fmt_cmp("TRUE COP", prev["cop"], curr["cop"], ".2f")
+
+    print(f"  {'─' * 60}")
+    print()
 
 
 def main():
-    # Default: last night (yesterday 22:00 to today 08:00)
     if len(sys.argv) > 1:
         try:
             ref_date = datetime.strptime(sys.argv[1], "%Y-%m-%d")
@@ -220,51 +382,15 @@ def main():
         sys.exit(1)
 
     cycles = analyze_night(rows)
-    print_report(date_str, cycles)
+    print_report(date_str, cycles, rows)
 
-    # If previous night data exists, show comparison
+    # Comparison with previous night
     prev_start = start_dt - timedelta(days=1)
     prev_end = end_dt - timedelta(days=1)
     prev_rows = load_period(CSV_PATH, prev_start, prev_end)
     if prev_rows:
         prev_cycles = analyze_night(prev_rows)
-        prev_heating = [c for c in prev_cycles if not c["is_dhw"]]
-        curr_heating = [c for c in cycles if not c["is_dhw"]]
-
-        prev_durations = [cycle_duration_min(c) for c in prev_heating if cycle_duration_min(c) > 0]
-        curr_durations = [cycle_duration_min(c) for c in curr_heating if cycle_duration_min(c) > 0]
-
-        prev_hz = [h for c in prev_heating for h in c["hz_values"]]
-        curr_hz = [h for c in curr_heating for h in c["hz_values"]]
-
-        prev_cop = [v for c in prev_heating for v in c["cop_values"]]
-        curr_cop = [v for c in curr_heating for v in c["cop_values"]]
-
-        print(f"\n  COMPARISON vs previous night ({prev_start.strftime('%Y-%m-%d')})")
-        print(f"  {'─' * 60}")
-        print(f"  {'Metric':<25} {'Previous':>12} {'Current':>12} {'Change':>12}")
-        print(f"  {'─' * 60}")
-
-        def fmt_cmp(label, prev_val, curr_val, fmt_str=".0f", lower_is_better=False):
-            if prev_val is None or curr_val is None:
-                return
-            diff = curr_val - prev_val
-            arrow = "▼" if diff < 0 else "▲" if diff > 0 else "="
-            good = (diff < 0) if lower_is_better else (diff > 0)
-            marker = " ✓" if good and abs(diff) > 0.1 else ""
-            print(f"  {label:<25} {prev_val:>12{fmt_str}} {curr_val:>12{fmt_str}} {arrow}{abs(diff):>10{fmt_str}}{marker}")
-
-        fmt_cmp("Heating cycles", len(prev_heating), len(curr_heating), "d", lower_is_better=True)
-        if prev_durations and curr_durations:
-            fmt_cmp("Avg run (min)", sum(prev_durations)/len(prev_durations), sum(curr_durations)/len(curr_durations), ".0f")
-        if prev_hz and curr_hz:
-            fmt_cmp("Avg Hz", sum(prev_hz)/len(prev_hz), sum(curr_hz)/len(curr_hz), ".0f", lower_is_better=True)
-            fmt_cmp("Max Hz", max(prev_hz), max(curr_hz), ".0f", lower_is_better=True)
-        if prev_cop and curr_cop:
-            fmt_cmp("Avg COP", sum(prev_cop)/len(prev_cop), sum(curr_cop)/len(curr_cop), ".1f")
-
-        print(f"  {'─' * 60}")
-        print()
+        print_comparison(prev_cycles, cycles, prev_start.strftime("%Y-%m-%d"))
 
 
 if __name__ == "__main__":
